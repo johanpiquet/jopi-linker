@@ -12,24 +12,25 @@ async function genWriteFile(filePath: string, fileContent: string): Promise<void
     return jk_fs.writeTextToFile(filePath, fileContent);
 }
 
-async function genAddDirAlias(pathInsideGenDir: string, sourceDir: string): Promise<void> {
-    let dirPath = jk_fs.join(gGenRootDir, pathInsideGenDir);
-
-    if (await jk_fs.isDirectory(sourceDir)) {
-        await jk_fs.symlink(sourceDir, dirPath);
-    }
-}
-
 async function addImportAlias(newFilePath: string, targetFilePath: string) {
     let relPath = jk_fs.getRelativePath(jk_fs.dirname(newFilePath), targetFilePath);
     await genWriteFile(newFilePath, `import D from "${relPath}";\nexport default D;\n`);
 }
 
-async function declareUid(uid: string, sourceDirPath: string, itemType: string) {
+async function declareUid(uid: string, sourceFilePath: string, itemType: string) {
     console.log("Add items [" + itemType + "] with id", uid);
 
     const newFilePath = jk_fs.resolve(gGenRootDir, itemType, uid + ".ts")
-    await addImportAlias(newFilePath, jk_fs.join(sourceDirPath, "index.tsx"));
+    await addImportAlias(newFilePath, sourceFilePath);
+}
+
+async function resolveFile(sourceDirPath: string, fileNames: string[]): Promise<string|undefined> {
+    for (let fileName of fileNames) {
+        let filePath = jk_fs.join(sourceDirPath, fileName);
+        if (await jk_fs.isFile(filePath)) return filePath;
+    }
+
+    return undefined;
 }
 
 //endregion
@@ -39,24 +40,73 @@ async function declareUid(uid: string, sourceDirPath: string, itemType: string) 
 interface DirProcessorParams {
     dirPath: string;
     itemsType: string;
-    resolveMode: "file"|"dir";
+    mode: "file"|"dir"|"list";
     onItem: ItemHandler;
+    resolve?: Record<string, string[]>;
 }
 
 interface DirProcessorItem {
     itemPath: string;
     itemType: string;
     itemUid: string;
+    priority?: PriorityLevel;
+    resolved?: Record<string, string|undefined>;
 }
 
 type ItemHandler = (props: DirProcessorItem) => Promise<void>;
+type PriorityLevel = "default"|"veryHigh"|"high"|"low"|"veryLow";
 
 async function processDir(p: DirProcessorParams) {
-    async function processItem(itemPath: string) {
+    async function processFile(itemPath: string) {
         await p.onItem({
             itemPath,
             itemType: p.itemsType,
             itemUid: jk_fs.basename(itemPath)
+        });
+    }
+
+    async function processDir(itemPath: string) {
+        let resolved: Record<string, string | undefined> = {};
+
+        if (p.resolve) {
+            for (let key in p.resolve) {
+                resolved[key] = await resolveFile(itemPath, p.resolve[key]);
+            }
+        }
+
+        /*let uidFiles = (await jk_fs.listDir(itemPath)).filter(entry => {
+            if (entry.isFile && entry.name.endsWith(".uid")) {
+                return entry.fullPath;
+            }
+        });*/
+
+        let priority: PriorityLevel = "default";
+
+        let priorityFiles = (await jk_fs.listDir(itemPath)).filter(entry => {
+            if (!entry.isFile) return false;
+
+            switch (entry.name) {
+                case "priorityVeryHigh":
+                case "priorityHigh":
+                case "priorityDefault":
+                case "priorityLow":
+                case "priorityVeryLow":
+                    priority = entry.name.substring(8) as PriorityLevel;
+                    return true;
+            }
+
+            return false;
+        });
+
+        if (priorityFiles.length>1) {
+            throw "Error - More than one priority file declared here: " + itemPath;
+        }
+
+        await p.onItem({
+            itemPath, resolved,
+            itemType: p.itemsType,
+            itemUid: jk_fs.basename(itemPath),
+            priority
         });
     }
 
@@ -77,14 +127,16 @@ async function processDir(p: DirProcessorParams) {
         // Underscore allows disabling the item.
         if ((entry.name[0]==="_") || (entry.name[0]===".")) continue;
 
-        if (p.resolveMode === "file") {
+        if (p.mode === "file") {
             if (entry.isFile) {
-                await processItem(entry.fullPath);
+                await processFile(entry.fullPath);
             }
-        } else {
+        } else if (p.mode === "dir") {
             if (entry.isDirectory) {
-                await processItem(entry.fullPath);
+                await processDir(entry.fullPath);
             }
+        } else if (p.mode === "list") {
+            // Directories forming a list.
         }
     }
 }
@@ -113,10 +165,17 @@ async function processDefinesDir(moduleDir: string) {
         await processDir({
             dirPath: itemType.fullPath,
             itemsType: itemType.name,
-            resolveMode: "dir",
+            mode: "dir",
+
+            resolve: {
+                "info": ["info.json"],
+                "entryPoint": ["index.tsx", "index.ts"]
+            },
 
             onItem: async (props) => {
-                await declareUid(props.itemUid, props.itemPath, props.itemType);
+                if (props.resolved?.entryPoint) {
+                    await declareUid(props.itemUid, props.resolved.entryPoint, itemType.name);
+                }
             }
         });
     }
