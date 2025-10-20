@@ -16,80 +16,43 @@ jopi.uid.sources.json    > Indique quels fournisseurs utiliser pour trouver les 
 jopi.uid.replace.json   > Permet de remplacer un UID par un autre.
 
 /gen                            > Le code généré. Bindé sur @/
-/gen/ui.block                   > Les éléments émits par @defines/
-/gen/alias                      > Bindé sur @/@alias
-/src                            > Le code source.
+/gen/ui.block/uidA.ts
+/gen/ui.block/aliasName.ts
+
+/src/moduleA/@define/ui.block/uid/index.ts
+/src/moduleA/@alias/ui.block/uid
+
+/src                                        > Le code source.
 /src/@features
-/src/moduleA                    > Un module activé      (si underscore = désactivé)
-/src/moduleA/@alias             > Les alias déclarés ici
+/src/moduleA                                 > Un module activé      (si underscore = désactivé)
+
 /src/moduleA/@composites
 /src/moduleA/@events
 /src/moduleA/@listeners
-/src/moduleA/@placeholders
 /src/moduleA/@routes
-/src/moduleA/@define/uiBlock                > les composants ui
-/src/moduleA/@define/uiComponent                > les composants ui
+
 /src/moduleA/uiInit.ts
 /src/moduleA/serverInit.ts
 
-******************************************************************************************************* Dossier /defines
+******************************************************************************************************* Dossier @defines
 
 Permet de définir des éléments.
-    Format: @defines/type/uid
-                            /infos.json             Optional
-                            /ref/functionA.ts       Si "functionA" est référencé quelque part.
+    Format: @defines/type/uid/index.ts
 
     Exemple: @define/ui.block/92e64017-7d75-4b14-a1b1-6561e5e31946/info.json
+            --> Va engendrer la création du dossier:
+                /gen/ui.block/92e64017-7d75-4b14-a1b1-6561e5e31946  pointant sur l'original.
+                Et référencé via: @/ui.block/92e64017-7d75-4b14-a1b1-6561e5e31946
 
---> Va engendrer la création du dossier:
-        /gen/ui.block/92e64017-7d75-4b14-a1b1-6561e5e31946  pointant sur l'original.
-        Et référencé via: @/ui.block/92e64017-7d75-4b14-a1b1-6561e5e31946
-
-
-******************************************************************************************************* Dossier /gen
-
-- Ce dossier est associé à l'alias typescript @uid/
-
-- Il correspond au dossier "gen/@uid" dans lequel tout les alias sont présents.
-
-    -- Exemple --
-    /package.json
-    /gen/@uid:           Tout les uid de components se retrouvent ici.
-    /gen/@uid/uid1.ts:   Dedans: "../../../src/_moduleA/components/myComponent/index.tsx";
-
-- L'intérêt est de pouvoir faire ça dans mon code:
-    import cpA from "@/uid/uid1.ts"
-
-- Pourquoi est-ce utile ?
-    -> Parce que je ne sais pas quel module va exposer cet uid.
-
-*************************************************************************************** Dossier @replace et @placeholder
-
-- Le dossier "placeholder" permet de désigner un élément dont on ne connaît pas encore l'implémentation.
-    - Le premier sous-dossier indique le type d'élément (component, schema, ...).
-    - Le second l'uid de l'élément.
-
-    /@placeholders/itemUid           > son uid
-                    /index.tsx      > son implémentation par défaut (optionnel)
-                    /info.json      > des informations sur l'élément (optionnel)
-
+******************************************************************************************************* Dossier @replace
 
 - Le dossier "replace" permet de remplacer des ui par d'autres.
 
-    /@replace/uidA
-                /uidB               < uidA sera remplacé par uidB
-                /low_priority       < La priorité à donner (optionnel)
-                /info.json
+    /@replace/ui.block/uidA/uidB/priority                                        < fichier ou dossier (pour priority)
+        --> Fait que le fichier /gen/ui.block/uidA/index.ts
+            va pointer va       /@defines/ui.bloc/uidB/index.tsx
 
-- La conséquence est que dans le dossier "@/uid" "uidA" sera remplacé par "uidB".
-
-********************************************************************************************************* Dossier @alias
-
-Le dossier "@alias" permet de donner un nom à un uid, afin d'utiliser quelque chose ayant plus de signification.
-
-    /@alias/aliasName        < Le dossier peut être vide
-                /uid        < Ou je peux indiquer un uid par défaut
-                /priority   < Avec une priorité pour cet uid par défaut
+        + doit remplacer les alias pointant sur uidA
 
 
 **************************************************************************************************** Dossier @composites
@@ -103,8 +66,8 @@ Ils donnent lieu à une génération de fichiers dont le contenu est ainsi:
 
 - Le dossier /@composites permet de créer un composite.
 
-        /@composites/uid/                          < L'uid du composite à créer
-                    1_OptionalName/uid           < L'unique intérêt de 1_OptinalName est le tri alphabétique
+        /@composites/ui.block/uid/                               < L'uid du composite à créer
+                    1_OptionalName/refId.uid            < L'unique intérêt de 1_OptinalName est le tri alphabétique
                                  /priority
 
 
