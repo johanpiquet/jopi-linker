@@ -1,0 +1,31 @@
+{
+  "name": "jopi-linker",
+  "version": "0.0.1",
+  "license": "MIT",
+  "homepage": "https://github.com/johanpiquet/jopi-linker",
+  "keywords": [],
+  "author": "Johan PIQUET",
+  "description": "Tool for project generator",
+  "engines": {
+    "node": ">=22.18.0"
+  },
+  "main": "dist/index.js",
+  "types": "dist/index.d.ts",
+  "type": "module",
+  "scripts": {
+    "build": "npx tsc",
+    "tsc": "npx tsc",
+    "bun-publish": "npx tsc && bun publish",
+    "clean": "rm -rf dist .turbo tsconfig.tsbuildinfo",
+
+    "start": "node dist/index.js"
+  },
+  "devDependencies": {
+    "@types/bun": "latest",
+    "@types/yargs": "^17.0.33"
+  },
+  "dependencies": {
+  },
+  "publishedDate": "9/29/2025",
+  "publicPublishedDate": "9/25/2025"
+}

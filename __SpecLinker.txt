@@ -1,0 +1,156 @@
+************************************************************************************************************ Outils JOPI
+
+jopi init: initialise le projet
+jopi run : exécute le projet (bun ou node: défini dans la config)           <-- !!!!
+jopi features list : liste les features dispo
+jopi features add : ajoute une feature
+jopi find uid : trouve l'emplacement de l'élément ayant cet uid
+jopi uid : génère un uid
+
+jopi install uid : installe un élément dont l'uid est celui indiqué.
+                   Va utiliser les fichiers: jopi.uid.sources.json et jopi.uid.replace.json
+
+*********************************************************************************************************** Les dossiers
+
+jopi.uid.sources.json    > Indique quels fournisseurs utiliser pour trouver les composants
+jopi.uid.replace.json   > Permet de remplacer un UID par un autre.
+
+/gen                            > Le code généré. Bindé sur @/
+/gen/ui.block                   > Les éléments émits par @defines/
+/gen/alias                      > Bindé sur @/@alias
+/src                            > Le code source.
+/src/@features
+/src/moduleA                    > Un module activé      (si underscore = désactivé)
+/src/moduleA/@alias             > Les alias déclarés ici
+/src/moduleA/@composites
+/src/moduleA/@events
+/src/moduleA/@listeners
+/src/moduleA/@placeholders
+/src/moduleA/@routes
+/src/moduleA/@define/uiBlock                > les composants ui
+/src/moduleA/@define/uiComponent                > les composants ui
+/src/moduleA/uiInit.ts
+/src/moduleA/serverInit.ts
+
+******************************************************************************************************* Dossier /defines
+
+Permet de définir des éléments.
+    Format: @defines/type/uid
+                            /infos.json             Optional
+                            /ref/functionA.ts       Si "functionA" est référencé quelque part.
+
+    Exemple: @define/ui.block/92e64017-7d75-4b14-a1b1-6561e5e31946/info.json
+
+--> Va engendrer la création du dossier:
+        /gen/ui.block/92e64017-7d75-4b14-a1b1-6561e5e31946  pointant sur l'original.
+        Et référencé via: @/ui.block/92e64017-7d75-4b14-a1b1-6561e5e31946
+
+
+******************************************************************************************************* Dossier /gen
+
+- Ce dossier est associé à l'alias typescript @uid/
+
+- Il correspond au dossier "gen/@uid" dans lequel tout les alias sont présents.
+
+    -- Exemple --
+    /package.json
+    /gen/@uid:           Tout les uid de components se retrouvent ici.
+    /gen/@uid/uid1.ts:   Dedans: "../../../src/_moduleA/components/myComponent/index.tsx";
+
+- L'intérêt est de pouvoir faire ça dans mon code:
+    import cpA from "@/uid/uid1.ts"
+
+- Pourquoi est-ce utile ?
+    -> Parce que je ne sais pas quel module va exposer cet uid.
+
+*************************************************************************************** Dossier @replace et @placeholder
+
+- Le dossier "placeholder" permet de désigner un élément dont on ne connaît pas encore l'implémentation.
+    - Le premier sous-dossier indique le type d'élément (component, schema, ...).
+    - Le second l'uid de l'élément.
+
+    /@placeholders/itemUid           > son uid
+                    /index.tsx      > son implémentation par défaut (optionnel)
+                    /info.json      > des informations sur l'élément (optionnel)
+
+
+- Le dossier "replace" permet de remplacer des ui par d'autres.
+
+    /@replace/uidA
+                /uidB               < uidA sera remplacé par uidB
+                /low_priority       < La priorité à donner (optionnel)
+                /info.json
+
+- La conséquence est que dans le dossier "@/uid" "uidA" sera remplacé par "uidB".
+
+********************************************************************************************************* Dossier @alias
+
+Le dossier "@alias" permet de donner un nom à un uid, afin d'utiliser quelque chose ayant plus de signification.
+
+    /@alias/aliasName        < Le dossier peut être vide
+                /uid        < Ou je peux indiquer un uid par défaut
+                /priority   < Avec une priorité pour cet uid par défaut
+
+
+**************************************************************************************************** Dossier @composites
+
+Les composites sont des tableaux générés en assemblant plusieurs éléments afin de former un tableau.
+Ils donnent lieu à une génération de fichiers dont le contenu est ainsi:
+
+    import E1 from "@/uid/uidA"
+    import E2 from "@/uid/uidA"
+    export default [E1, E2];
+
+- Le dossier /@composites permet de créer un composite.
+
+        /@composites/uid/                          < L'uid du composite à créer
+                    1_OptionalName/uid           < L'unique intérêt de 1_OptinalName est le tri alphabétique
+                                 /priority
+
+
+        /@composites/@patch/                               < Permet de patcher une règle de composite.
+            /compositeUid/uidInserted/patch.json            < Va indiquer sa nouvelle priorité
+                                                                ou s'il faut le retirer
+                                                                ou le remplacer par un autre uid
+
+
+***************************************************************************************** Dossiers @events et @listeners
+
+Le dossier @events permet de définir un événement, et le dossier @listeners permet d'écouter cet évenement.
+
+/@events/uid
+        info.json       < Va indiquer un titre.
+        type.ts         < Format: export interface TYPE { ... }
+
+/@listeners/eventUid/
+        /1_listenerA/index.tsx
+
+
+************************************************************************************** Dossier racine @features (racine)
+
+Ce dossier permet d'activer/désactiver des fonctionnalités.
+
+    /@features
+        /README.md                          < explique ce que c'est
+        /tailwind
+            /README.md                      < documentation
+            /config.json
+            /binding
+                pointA.ts                  <- si "pointA" est référencé, alors prend le default de ce fichier.
+        /jsonWebToken
+            /key.txt                        <- la clé de cryptage.
+        /userStore
+            /users.json                     <- si présent, utilise automatiquement un store json.
+
+
+******************************************************************************************************** Dossier @routes
+
+Ce dossier permet d'indiquer des routes pour des urls
+
+/@routes/ecommerce/product/[productName]/listing
+                                            /index.tsx
+                                            /onPost.tsx
+                                            /onDelete.tsx
+                                            /cacheRules.json
+
+
