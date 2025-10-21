@@ -5,6 +5,7 @@ import * as jk_app from "jopi-toolkit/jk_app";
 import * as jk_what from "jopi-toolkit/jk_what";
 
 const LOG = false;
+const USE_FLAT_OUTPUT = true;
 
 //region Helpers
 
@@ -21,12 +22,6 @@ async function createLink_Import(newFilePath: string, targetFilePath: string) {
 async function createLink_Symlink(newFilePath: string, targetFilePath: string) {
     await jk_fs.mkDir(jk_fs.dirname(newFilePath));
     await jk_fs.symlink(targetFilePath, newFilePath, "file");
-}
-
-async function createImportRef(itemType: string, itemId: string, sourceFilePath: string) {
-    const newFilePath = jk_fs.resolve(gGenRootDir, itemType, itemId + ".ts")
-    //await createLink_Import(newFilePath, sourceFilePath);
-    await createLink_Symlink(newFilePath, sourceFilePath);
 }
 
 async function resolveFile(sourceDirPath: string, fileNames: string[]): Promise<string|undefined> {
@@ -188,7 +183,90 @@ function addComposite(uid: string, items: CompositeItem[], dirPath: string, item
     current.items.push(...items);
 }
 
-async function createLinks() {
+//endregion
+
+//region Generating code
+
+async function generateDefines() {
+    async function generateDefine(itemId: string, entry: DefineItem) {
+        let newFilePath: string;
+
+        if (USE_FLAT_OUTPUT) {
+            newFilePath = jk_fs.join(gGenRootDir, "id", itemId);
+        } else {
+            newFilePath = jk_fs.join(gGenRootDir, "id", entry.itemType, itemId);
+        }
+
+        await createLink_Symlink(newFilePath, jk_fs.dirname(entry.entryPoint));
+    }
+
+    for (let key in gDefine) {
+        const entry = gDefine[key];
+        await generateDefine(key, entry);
+    }
+}
+
+async function generateComposites() {
+    async function emitComposite(composite: Composite) {
+        composite.items = sortByPriority(composite.items);
+
+        let source = "";
+        let count = 1;
+
+        let outDir: string;
+        if (USE_FLAT_OUTPUT) outDir = jk_fs.join(gGenRootDir, "id");
+        else outDir = jk_fs.join(gGenRootDir, "id", "@composite", composite.itemsType);
+
+        for (let item of composite.items) {
+            let entryPoint = item.entryPoint;
+
+            if (!entryPoint) {
+                let d = requireDefine(item.ref!);
+                entryPoint = d.entryPoint;
+            }
+
+            entryPoint = jk_fs.getRelativePath(outDir, entryPoint);
+            source += `import I${count++} from "${entryPoint}";\n`;
+        }
+
+        let max = composite.items.length;
+        source += "\nexport const C = [";
+        for (let i=1;i<=max;i++) source += `I${i},`;
+        source += "];";
+
+        await genWriteFile(jk_fs.join(outDir, composite.uid + ".ts"), source);
+    }
+
+    function sortByPriority(items: CompositeItem[]): CompositeItem[] {
+        function addPriority(priority: PriorityLevel) {
+            let e = byPriority[priority];
+            if (e) items.push(...e);
+        }
+
+        const byPriority: any = {};
+
+        for (let item of items) {
+            if (!byPriority[item.priority]) byPriority[item.priority] = [];
+            byPriority[item.priority].push(item);
+        }
+
+        items = [];
+
+        addPriority(PriorityLevel.veryHigh);
+        addPriority(PriorityLevel.high);
+        addPriority(PriorityLevel.default);
+        addPriority(PriorityLevel.low);
+        addPriority(PriorityLevel.veryLow);
+
+        return items;
+    }
+
+    for (let composite of Object.values(gComposites)) {
+        await emitComposite(composite);
+    }
+}
+
+async function generateAll() {
     function applyReplaces() {
         for (let mustReplace in gReplacing) {
             let replaceItem = gReplacing[mustReplace];
@@ -217,78 +295,9 @@ async function createLinks() {
         }
     }
 
-    async function emitDefines() {
-        async function doDefine(itemId: string, entry: DefineItem) {
-            await createImportRef(entry.itemType, itemId, entry.entryPoint);
-        }
-
-        for (let key in gDefine) {
-            const entry = gDefine[key];
-            await doDefine(key, entry);
-        }
-    }
-
-    async function emitComposites() {
-        async function emitComposite(composite: Composite) {
-            composite.items = sortByPriority(composite.items);
-
-            let source = "";
-            let count = 1;
-
-            let outDir = jk_fs.join(gGenRootDir, "@composite", composite.itemsType);
-
-            for (let item of composite.items) {
-                let entryPoint = item.entryPoint;
-
-                if (!entryPoint) {
-                    let d = requireDefine(item.ref!);
-                    entryPoint = d.entryPoint;
-                }
-
-                entryPoint = jk_fs.getRelativePath(outDir, entryPoint);
-                source += `import I${count++} from "${entryPoint}";\n`;
-            }
-
-            let max = composite.items.length;
-            source += "\nexport const C = [";
-            for (let i=1;i<=max;i++) source += `I${i},`;
-            source += "];";
-
-            await genWriteFile(jk_fs.join(outDir, composite.uid + ".ts"), source);
-        }
-
-        function sortByPriority(items: CompositeItem[]): CompositeItem[] {
-            function addPriority(priority: PriorityLevel) {
-                let e = byPriority[priority];
-                if (e) items.push(...e);
-            }
-
-            const byPriority: any = {};
-
-            for (let item of items) {
-                if (!byPriority[item.priority]) byPriority[item.priority] = [];
-                byPriority[item.priority].push(item);
-            }
-
-            items = [];
-
-            addPriority(PriorityLevel.veryHigh);
-            addPriority(PriorityLevel.high);
-            addPriority(PriorityLevel.default);
-            addPriority(PriorityLevel.low);
-            addPriority(PriorityLevel.veryLow);
-
-            return items;
-        }
-
-        for (let composite of Object.values(gComposites)) {
-            await emitComposite(composite);
-        }
-    }
-
     applyReplaces();
-    await emitDefines();
-    await emitComposites();
+    await generateDefines();
+    await generateComposites();
 }
 
 //endregion
@@ -539,7 +548,7 @@ async function processChildDir(p: ChildDirProcessorParams, dirItem: jk_fs.DirIte
 async function processProject() {
     await jk_fs.rmDir(gGenRootDir);
     await processModules();
-    await createLinks();
+    await generateAll();
 }
 
 async function processModules() {

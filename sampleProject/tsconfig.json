@@ -5,7 +5,7 @@
 
     "outDir": "./dist",
     "rootDir": "./src",
-    "baseUrl": "./src",
+    "baseUrl": "./",
 
     "lib": ["ES2022", "DOM", "DOM.Iterable"],
 
@@ -24,8 +24,11 @@
     "verbatimModuleSyntax": true,
     "allowJs": false,
 
+    "resolveJsonModule": true,
+    "preserveSymlinks": false,
+
     "paths": {
-      "@/*": ["./src/gen/*"]
+      "@/id/*": ["./src/_gen/id/*"]
     }
   },
 

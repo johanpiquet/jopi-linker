@@ -10,8 +10,8 @@
 
     "jsx": "react-jsx",
     "target": "ESNext",
-    "module": "NodeNext",
-    "moduleResolution": "NodeNext",
+    "module": "ESNext",
+    "moduleResolution": "bundler",
 
     "rewriteRelativeImportExtensions": true,
     "esModuleInterop": true,
