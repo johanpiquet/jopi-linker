@@ -1,1 +1,0 @@
-/Users/johan/Projets/jopi-rewrite-workspace/__packages/jopi-linker/sampleProject/src/moduleA/@defines/ui.block/itemB/index.tsx

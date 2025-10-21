@@ -34,7 +34,7 @@ jopi.uid.replace.json   > Permet de remplacer un UID par un autre.
 /src/moduleA/uiInit.ts
 /src/moduleA/serverInit.ts
 
-******************************************************************************************************* Dossier @defines
+******************************************************************************************************* Dossier @defines (ok)
 
 Permet de définir des éléments.
     Format: @defines/type/uid/index.ts
@@ -44,7 +44,7 @@ Permet de définir des éléments.
                 /gen/ui.block/92e64017-7d75-4b14-a1b1-6561e5e31946  pointant sur l'original.
                 Et référencé via: @/ui.block/92e64017-7d75-4b14-a1b1-6561e5e31946
 
-******************************************************************************************************* Dossier @replace
+******************************************************************************************************* Dossier @replace (ok)
 
 - Le dossier "replace" permet de remplacer des ui par d'autres.
 
@@ -66,9 +66,10 @@ Ils donnent lieu à une génération de fichiers dont le contenu est ainsi:
 
 - Le dossier /@composites permet de créer un composite.
 
-        /@composites/ui.block/uid/                               < L'uid du composite à créer
+        /@composites/ui.block/
+                    uid.myuid                           < L'uid du composite à créer
                     1_OptionalName/refId.uid            < L'unique intérêt de 1_OptinalName est le tri alphabétique
-                                 /priority
+                                  /priority
 
 
         /@composites/@patch/                               < Permet de patcher une règle de composite.
