@@ -4,8 +4,8 @@
     "declaration": true,
 
     "outDir": "./dist",
-    "rootDir": "./",
-    "baseUrl": "./",
+    "rootDir": "./src",
+    "baseUrl": "./src",
 
     "lib": ["ES2022", "DOM", "DOM.Iterable"],
 
@@ -25,13 +25,11 @@
     "allowJs": false,
 
     "paths": {
-      "@/*": ["./gen/*"]
+      "@/*": ["./src/gen/*"]
     }
   },
 
   "include": [
-    "./gen/**/*.ts",
-    "./gen/**/*.js",
     "./src/**/*.ts",
     "./src/**/*.tsx"
   ],

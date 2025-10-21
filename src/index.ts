@@ -1,14 +1,12 @@
 import * as jk_fs from "jopi-toolkit/jk_fs";
 import * as jk_tools from "jopi-toolkit/jk_tools";
 import * as jk_term from "jopi-toolkit/jk_term";
+import * as jk_app from "jopi-toolkit/jk_app";
+import * as jk_what from "jopi-toolkit/jk_what";
 
-const LOG = true;
+const LOG = false;
 
 //region Helpers
-
-let gProjectRootDir = jk_fs.resolve("sampleProject");
-let gGenRootDir = jk_fs.join(gProjectRootDir, "gen");
-let gSrcRootDir = jk_fs.join(gProjectRootDir, "src");
 
 async function genWriteFile(filePath: string, fileContent: string): Promise<void> {
     await jk_fs.mkDir(jk_fs.dirname(filePath));
@@ -514,4 +512,34 @@ async function checkDirItem(entry: jk_fs.DirItem, allowUidRefFile: boolean) {
 
 //endregion
 
+let gProjectRootDir: string;
+let gGenRootDir: string;
+let gSrcRootDir: string;
+
+async function bootstrap() {
+    async function searchLinkerScript(): Promise<string|undefined> {
+        let jopiLinkerScript = jk_fs.join(gProjectRootDir, "dist", "jopi-linker.js");
+        if (await jk_fs.isFile(jopiLinkerScript)) return jopiLinkerScript;
+
+        if (jk_what.isBunJS) {
+            jopiLinkerScript = jk_fs.join(gSrcRootDir, "jopi-linker.ts");
+            if (await jk_fs.isFile(jopiLinkerScript)) return jopiLinkerScript;
+        }
+
+        return undefined;
+    }
+
+    gProjectRootDir = jk_app.findPackageJsonDir();
+
+    //TODO: remove
+    gProjectRootDir = jk_fs.resolve(gProjectRootDir, "sampleProject");
+
+    gSrcRootDir = jk_fs.join(gProjectRootDir, "src");
+    gGenRootDir = jk_fs.join(gSrcRootDir, ".gen");
+
+    let jopiLinkerScript = await searchLinkerScript();
+    if (jopiLinkerScript) await import(jopiLinkerScript);
+}
+
+await bootstrap();
 await processProject();
