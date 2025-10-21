@@ -46,15 +46,19 @@ function declareError(message: string, filePath: string): Error {
     process.exit(1);
 }
 
+function addNameIntoFile(filePath: string) {
+    jk_fs.writeTextToFile(filePath, jk_fs.basename(filePath)).catch();
+}
+
 //endregion
 
 //region Registry
 
 interface DefineItem {
     uid: string;
-    alias?: string;
+    alias: string[];
     entryPoint: string;
-    itemType: string;
+    itemCategory: string;
     itemPath: string;
 }
 
@@ -90,34 +94,36 @@ function addReplace(mustReplace: string, replaceWith: string, priority: Priority
     if (LOG) console.log("Add REPLACE", mustReplace, "=>", replaceWith, "priority", priority);
 }
 
-function addDefine(itemUid: string, itemAlias: string | undefined, entryPoint: string, itemType: string, itemPath: string) {
+function addDefine(itemUid: string, itemAlias: string[], entryPoint: string, itemCategory: string, itemPath: string) {
     if (gDefine[itemUid]) {
         throw declareError("The UID " + itemUid + " is already defined", gDefine[itemUid].itemPath);
     }
 
-    if (itemAlias && gDefine[itemAlias]) {
-        throw declareError("The alias " + itemAlias + " is already defined", gDefine[itemAlias].itemPath);
+    for (let alias of itemAlias) {
+        if (gDefine[alias]) {
+            throw declareError("The alias " + alias + " is already defined", itemPath);
+        }
     }
 
     let entry: DefineItem = {
         uid: itemUid, alias: itemAlias,
-        entryPoint, itemType, itemPath
+        entryPoint, itemCategory, itemPath
     };
 
     gDefine[itemUid] = entry;
-    if (itemAlias) gDefine[itemAlias] = entry;
+    for (let alias of itemAlias) gDefine[alias] = entry;
 
     const relPath = jk_fs.getRelativePath(gSrcRootDir, entryPoint);
 
     if (LOG) {
         console.log("Add DEFINE", itemUid, "=>", relPath);
-        if (itemAlias) console.log("Add ALIAS", itemAlias, "=>", itemUid);
+        for (let alias of itemAlias) console.log("Add ALIAS", alias, "=>", itemUid);
     }
 }
 
 async function createLinks() {
     async function doDefine(itemId: string, entry: DefineItem) {
-        await createImportRef(entry.itemType, itemId, entry.entryPoint);
+        await createImportRef(entry.itemCategory, itemId, entry.entryPoint);
     }
 
     for (let mustReplace in gReplacing) {
@@ -152,25 +158,38 @@ async function createLinks() {
     }
 }
 
+async function getSortedDirItem(dirPath: string): Promise<jk_fs.DirItem[]> {
+    const items = await jk_fs.listDir(dirPath);
+    return items.sort((a, b) => a.name.localeCompare(b.name));
+}
 //endregion
 
 //region Processing dir
 
 interface DirProcessorParams {
-    dirPath: string;
-    itemsType: string;
-    mode: "file"|"dir"|"fileOrDir";
-    onItem: ItemHandler;
-    resolve?: Record<string, string[]>;
-    dontAddMissingUid?: boolean;
+    dirToScan: string;
+    dirToScan_expectFsType: "file"|"dir"|"fileOrDir";
+    dirToScan_nameConstraint: "canBeUid"|"mustNotBeUid"|"mustBeUid";
+
+    childDir_filesToResolve?: Record<string, string[]>;
+    childDir_requireMyUidFile?: boolean;
+    childDir_errorIfMyUidFile?: boolean;
+    childDir_createMissingMyUidFile?: boolean;
+
+    childDir_requireRefFile?: boolean;
+
+    itemProcessor: ItemHandler;
+    itemCategory: string;
 }
 
 interface DirProcessorItem {
-    itemUid: string;
-    itemAlias?: string;
+    itemName: string;
+    itemUid?: string;
+    itemAlias: string[];
+    refFile?: string;
 
     itemPath: string;
-    itemType: string;
+    itemCategory: string;
     isFile: boolean;
     priority?: PriorityLevel;
 
@@ -188,35 +207,39 @@ enum PriorityLevel {
 }
 
 async function searchPriorityLevel(baseDir: string): Promise<PriorityLevel | undefined> {
+    function setPriority(level: PriorityLevel) {
+        if (priority) throw declareError("More than one priority file declared", baseDir);
+        priority = level;
+    }
+
     let priority: PriorityLevel | undefined = undefined;
 
-    let priorityFiles = (await jk_fs.listDir(baseDir)).filter(entry => {
+    (await jk_fs.listDir(baseDir)).forEach(entry => {
         if (!entry.isFile) return false;
+        if (!entry.name.startsWith("priority")) return false;
+
+        entry.name = entry.name.toLowerCase();
+        entry.name = entry.name.replace("-", "");
+        entry.name = entry.name.replace("_", "");
 
         switch (entry.name) {
-            case "priorityVeryHigh":
-                priority = PriorityLevel.veryHigh;
-                return true;
-            case "priorityHigh":
-                priority = PriorityLevel.high;
-                return true;
-            case "priorityDefault":
-                priority = PriorityLevel.default;
-                return true;
-            case "priorityLow":
-                priority = PriorityLevel.low;
-                return true;
-            case "priorityVeryLow":
-                priority = PriorityLevel.veryLow;
-                return true;
+            case "priorityveryhigh":
+                setPriority(PriorityLevel.veryHigh);
+                break;
+            case "priorityhigh":
+                setPriority(PriorityLevel.high);
+                break;
+            case "prioritydefault":
+                setPriority(PriorityLevel.default);
+                break;
+            case "prioritylow":
+                setPriority(PriorityLevel.low);
+                break;
+            case "priorityverylow":
+                setPriority(PriorityLevel.veryLow);
+                break;
         }
-
-        return false;
     });
-
-    if (priorityFiles.length > 1) {
-        throw declareError("More than one priority file declared", baseDir);
-    }
 
     return priority;
 }
@@ -226,22 +249,34 @@ async function processDir(p: DirProcessorParams) {
      * This function extracts information about the item,
      * do some check, and call `p.onItem` with the informations.
      */
-    async function processItem(itemPath: string, itemName: string, isFile: boolean) {
+    async function processDirItem(itemPath: string, itemName: string, isFile: boolean) {
         // The file / folder-name is a UUID4?
         let isUUID = jk_tools.isUUIDv4(itemName);
 
+        if (isUUID) {
+            if (p.dirToScan_nameConstraint==="mustNotBeUid") {
+                throw declareError("The name must NOT be an UID", itemPath);
+            }
+        } else {
+            if (p.dirToScan_nameConstraint==="mustBeUid") {
+                throw declareError("The name MUST be an UID", itemPath);
+            }
+        }
+
         // It's a file?
         if (isFile) {
-            // Require the file name to be an UID.
-            if (!isUUID) {
-                throw declareError("An UID is expected", itemPath);
+            if (p.childDir_requireMyUidFile && !isUUID) {
+                throw declareError("The file name MUST be an UID", itemPath);
             }
 
             // Process it now.
-            await p.onItem({
-                itemUid: itemName,
+            await p.itemProcessor({
+                itemName,
+                itemUid: isUUID ? itemName : undefined,
+                itemAlias: [],
+
                 itemPath, isFile,
-                itemType: p.itemsType
+                itemCategory: p.itemCategory
             });
 
             return;
@@ -251,16 +286,22 @@ async function processDir(p: DirProcessorParams) {
         //
         let resolved: Record<string, string | undefined> = {};
         //
-        if (p.resolve) {
-            for (let key in p.resolve) {
-                resolved[key] = await resolveFile(itemPath, p.resolve[key]);
+        if (p.childDir_filesToResolve) {
+            for (let key in p.childDir_filesToResolve) {
+                resolved[key] = await resolveFile(itemPath, p.childDir_filesToResolve[key]);
             }
         }
 
-        // Search the "uid.myuid" file, which allows to known the uid of the item.
+        let itemUid: string|undefined;
+
+        // Search the "uid.myuid" file, which allows knowing the uid of the item.
         //
-        let uidFiles = (await jk_fs.listDir(itemPath)).filter(entry => {
+        (await jk_fs.listDir(itemPath)).forEach(entry => {
             if (entry.isFile && entry.name.endsWith(".myuid")) {
+                if (itemUid) {
+                    throw declareError("More than one UID file declared", entry.fullPath);
+                }
+
                 // "_.myduid" is a special file name, which is automatically renamed with a new uid.
                 // Is used to help the developer to avoid generating himself a new uid.
                 //
@@ -269,51 +310,50 @@ async function processDir(p: DirProcessorParams) {
                     jk_fs.rename(entry.fullPath, jk_fs.join(jk_fs.dirname(entry.fullPath), entry.name));
                 }
 
+                itemUid = jk_fs.basename(entry.name, ".myuid");
+                addNameIntoFile(entry.fullPath);
+
                 return entry.fullPath;
             }
         });
 
-        let itemUid: string;
-        let itemAlias: string | undefined;
+        if (!itemUid) {
+            // > Not "ui.myuid" found? Then add it.
 
-        if (isUUID) {
-            // > If the directory name is an UID then
-            //   we must not have an "uid.myuid" file inside.
-
-            itemUid = itemName;
-
-            if (uidFiles.length) {
-                throw declareError("A UID file is found here but not expected", itemPath);
+            if (p.childDir_createMissingMyUidFile) {
+                itemUid = jk_tools.generateUUIDv4();
+                await jk_fs.writeTextToFile(jk_fs.join(itemPath, itemUid + ".myuid"), itemUid);
             }
         }
-        else {
-            // > Here the directory name is an alias.
-            //   We must have an "uid.myuid" inside (and only one).
 
-            itemAlias = itemName;
+        let itemAlias: string[] = [];
 
-            if (uidFiles.length > 1) {
-                throw declareError("More than one UID file declared", itemPath);
+        // Search the alias.
+        (await jk_fs.listDir(itemPath)).forEach(entry => {
+            if (entry.isFile && entry.name.endsWith(".alias")) {
+                itemAlias.push(jk_fs.basename(entry.name, ".alias"));
+                addNameIntoFile(entry.fullPath);
             }
+        });
 
-            if (uidFiles.length === 1) {
-                itemUid = jk_fs.basename(uidFiles[0].fullPath, ".myuid");
+        // Search the ref file.
+        let refFile: string|undefined;
+        //
+        (await jk_fs.listDir(itemPath)).forEach(entry => {
+            if (entry.isFile && entry.name.endsWith(".ref")) {
+                if (refFile) throw declareError("More than one .ref file found", itemPath);
+                refFile = jk_fs.basename(entry.name, ".ref");
+                addNameIntoFile(entry.fullPath);
+            }
+        });
 
-                // Add the uid into the file name.
-                // Will allow full text search.
-                //
-                await jk_fs.writeTextToFile(uidFiles[0].fullPath, itemUid);
-            } else {
-                // > Not "ui.myuid" found? Then add it.
-
-                if (!p.dontAddMissingUid) {
-                    itemUid = jk_tools.generateUUIDv4();
-                    await jk_fs.writeTextToFile(jk_fs.join(itemPath, itemUid + ".myuid"), itemUid);
-                }
-                else {
-                    // Here we presume that the uid will not be used.
-                    itemUid = "";
-                }
+        if (refFile) {
+            if (!p.childDir_requireRefFile) {
+                throw declareError("A .ref file is NOT expected", itemPath);
+            }
+        } else {
+            if (p.childDir_requireRefFile) {
+                throw declareError("A .ref file is required", itemPath);
             }
         }
 
@@ -322,27 +362,39 @@ async function processDir(p: DirProcessorParams) {
         //
         const priority: PriorityLevel|undefined = await searchPriorityLevel(itemPath);
 
-        await p.onItem({
-            itemUid, itemAlias, itemPath, isFile, resolved, priority,
-            itemType: p.itemsType
+        if (itemUid) {
+            if (p.childDir_errorIfMyUidFile) {
+                throw declareError("A .myuid file is found here but NOT EXPECTED", itemPath);
+            }
+        }
+        else {
+            if (p.childDir_requireMyUidFile) {
+                throw declareError("A .myuid file is required", itemPath);
+            }
+        }
+
+        await p.itemProcessor({
+            itemName, itemUid, itemAlias, refFile,
+            itemPath, isFile, resolved, priority,
+            itemCategory: p.itemCategory
         });
     }
 
-    let dirContent = await jk_fs.listDir(p.dirPath);
+    let dirContent = await getSortedDirItem(p.dirToScan);
 
     for (let entry of dirContent) {
         if (!await checkDirItem(entry, false)) continue
 
-        if (p.mode === "file") {
+        if (p.dirToScan_expectFsType === "file") {
             if (entry.isFile) {
-                await processItem(entry.fullPath, entry.name, true);
+                await processDirItem(entry.fullPath, entry.name, true);
             }
-        } else if (p.mode === "dir") {
+        } else if (p.dirToScan_expectFsType === "dir") {
             if (entry.isDirectory) {
-                await processItem(entry.fullPath, entry.name, false);
+                await processDirItem(entry.fullPath, entry.name, false);
             }
-        } else if (p.mode === "fileOrDir") {
-            await processItem(entry.fullPath, entry.name, entry.isFile===true);
+        } else if (p.dirToScan_expectFsType === "fileOrDir") {
+            await processDirItem(entry.fullPath, entry.name, entry.isFile===true);
         }
     }
 }
@@ -378,22 +430,28 @@ async function processDefinesDir(moduleDir: string) {
         if ((itemType.name[0]==='_') || (itemType.name[0]==='.')) continue;
 
         await processDir({
-            dirPath: itemType.fullPath,
-            itemsType: itemType.name,
-            mode: "dir",
+            dirToScan: itemType.fullPath,
+            dirToScan_expectFsType: "dir",
+            dirToScan_nameConstraint: "mustNotBeUid",
 
-            resolve: {
+            itemCategory: itemType.name,
+
+            childDir_requireMyUidFile: true,
+
+            childDir_filesToResolve: {
                 "info": ["info.json"],
                 "entryPoint": ["index.tsx", "index.ts"]
             },
 
-            onItem: async (props) => {
+            itemProcessor: async (props) => {
                 if (!props.resolved?.entryPoint) {
                     throw declareError("No 'index.ts' or 'index.tsx' file found", props.itemPath);
 
                 }
 
-                addDefine(props.itemUid, props.itemAlias, props.resolved.entryPoint, props.itemType, props.itemPath);
+                addDefine(
+                    props.itemUid!, props.itemAlias,
+                    props.resolved.entryPoint, props.itemCategory, props.itemPath);
             }
         });
     }
@@ -406,46 +464,22 @@ async function processReplacesDir(moduleDir: string) {
         if ((itemType.name[0]==='_') || (itemType.name[0]==='.')) continue;
 
         await processDir({
-            dirPath: itemType.fullPath,
-            itemsType: itemType.name,
-            mode: "fileOrDir",
+            dirToScan: itemType.fullPath,
+            dirToScan_expectFsType: "dir",
+            dirToScan_nameConstraint: "canBeUid",
 
-            dontAddMissingUid: true,
+            childDir_errorIfMyUidFile: false,
+            childDir_requireMyUidFile: false,
+            childDir_createMissingMyUidFile: false,
 
-            onItem: async (props) => {
-                if (props.itemUid && props.itemAlias) {
-                    throw declareError("An item can't have both an UID and an alias", props.itemPath);
-                }
+            childDir_requireRefFile: true,
 
-                // Here we are in the directory of the item to replace.
-                let items = await jk_fs.listDir(props.itemPath);
+            itemCategory: itemType.name,
 
-                let isFound = false;
-
-                for (let item of items) {
-                    if (!await checkDirItem(item, true)) continue;
-                    if (!item.isFile || !item.name.endsWith(".ref")) continue;
-
-                    let uid = jk_fs.basename(item.fullPath, ".ref");
-
-                    if (!jk_tools.isUUIDv4(uid)) {
-                        throw declareError("The item name must be an uid",  item.fullPath);
-                    }
-
-                    if (isFound) {
-                        throw declareError("More than one item to replace found",  props.itemPath);
-                    }
-                    //
-                    isFound = true;
-
-                    let priority: PriorityLevel|undefined;
-
-                    if (!item.isFile) {
-                        priority = await searchPriorityLevel(item.fullPath);
-                    }
-
-                    addReplace(props.itemAlias || props.itemUid, uid, priority, props.itemPath);
-                }
+            itemProcessor: async (props) => {
+                const itemToReplace = props.itemName;
+                const mustReplaceWith = props.refFile!;
+                addReplace(itemToReplace, mustReplaceWith, props.priority, props.itemPath);
             }
         });
     }
