@@ -1,45 +1,50 @@
 import * as jk_fs from "jopi-toolkit/jk_fs";
-import {addArobaseType, addDefine, type ArobaseDirHandlerParams, declareError, scanDir} from "./engine.ts";
+import {addArobaseType, addToRegistry, createLink_Symlink, declareError, type DefineItem, scanDir} from "./engine.ts";
 
-addArobaseType("defines", {
-    dirScanner: processDefinesDir,
-    async itemProcessor(e) {}
-});
+const gArobaseType = addArobaseType("defines", {
+    async dirScanner(p) {
+        let itemTypes = await jk_fs.listDir(p.arobaseDir);
 
-async function processDefinesDir(p: ArobaseDirHandlerParams) {
-    let itemTypes = await jk_fs.listDir(p.arobaseDir);
+        for (let itemType of itemTypes) {
+            if ((itemType.name[0]==='_') || (itemType.name[0]==='.')) continue;
 
-    for (let itemType of itemTypes) {
-        if ((itemType.name[0]==='_') || (itemType.name[0]==='.')) continue;
+            await scanDir({
+                dirToScan: itemType.fullPath,
+                dirToScan_expectFsType: "dir",
+                childDir_nameConstraint: "mustNotBeUid",
 
-        await scanDir({
-            dirToScan: itemType.fullPath,
-            dirToScan_expectFsType: "dir",
-            childDir_nameConstraint: "mustNotBeUid",
+                itemType: itemType.name,
 
-            itemType: itemType.name,
+                childDir_requireMyUidFile: true,
+                childDir_requireRefFile: false,
 
-            childDir_requireMyUidFile: true,
-            childDir_requireRefFile: false,
+                childDir_filesToResolve: {
+                    "info": ["info.json"],
+                    "entryPoint": ["index.tsx", "index.ts"]
+                },
 
-            childDir_filesToResolve: {
-                "info": ["info.json"],
-                "entryPoint": ["index.tsx", "index.ts"]
-            },
+                itemProcessor: async (props) => {
+                    if (!props.resolved?.entryPoint) {
+                        throw declareError("No 'index.ts' or 'index.tsx' file found", props.itemPath);
+                    }
 
-            itemProcessor: async (props) => {
-                if (!props.resolved?.entryPoint) {
-                    throw declareError("No 'index.ts' or 'index.tsx' file found", props.itemPath);
+                    addToRegistry([props.uid!, ...props.alias], {
+                        arobaseType: gArobaseType,
+
+                        uid: props.uid!,
+                        alias: props.alias,
+                        entryPoint: props.resolved.entryPoint,
+                        itemType: props.itemType,
+                        itemPath: props.itemPath,
+                    });
                 }
+            });
+        }
+    },
 
-                addDefine({
-                    uid: props.uid!,
-                    alias: props.alias,
-                    entryPoint: props.resolved.entryPoint,
-                    itemType: props.itemType,
-                    itemPath: props.itemPath,
-                });
-            }
-        });
+    async itemProcessor(key, rItem, infos) {
+        const item = rItem as DefineItem;
+        const newFilePath = jk_fs.join(infos.genDir, "id", key);
+        await createLink_Symlink(newFilePath, jk_fs.dirname(item.entryPoint));
     }
-}
+});

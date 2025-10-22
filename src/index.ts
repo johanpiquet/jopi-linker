@@ -1,6 +1,6 @@
 import {compile} from "./engine.ts";
-import "./definesType.ts";
-import "./compositesType.ts";
-import "./replacesType.ts";
+import "./typeDefines.ts";
+import "./typeComposites.ts";
+import "./typeReplaces.ts";
 
 await compile();

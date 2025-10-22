@@ -4,8 +4,7 @@ import * as jk_term from "jopi-toolkit/jk_term";
 import * as jk_app from "jopi-toolkit/jk_app";
 import * as jk_what from "jopi-toolkit/jk_what";
 
-const LOG = false;
-const USE_FLAT_OUTPUT = true;
+const LOG = true;
 
 //region Helpers
 
@@ -78,14 +77,15 @@ export async function checkDirItem(entry: jk_fs.DirItem, allowRefFile: boolean) 
 //region Registry
 
 export interface RegistryItem {
-    uid: string;
-    alias: string[];
     itemPath: string;
-    entryPoint: string;
-    itemType: string;
+    arobaseType: ArobaseType;
 }
 
 export interface DefineItem extends RegistryItem {
+    uid: string;
+    alias: string[];
+    entryPoint: string;
+    itemType: string;
 }
 
 export interface ReplaceItem {
@@ -99,31 +99,16 @@ export interface ReplaceItem {
     declarationFile: string;
 }
 
-export interface CompositeItem {
-    ref?: string;
-    entryPoint?: string;
-    priority: PriorityLevel;
-    sortKey: string;
+export interface AddDefineParams extends DefineItem {
 }
 
-export interface Composite {
-    uid: string;
-    allDirPath: string[];
-    items: CompositeItem[];
-    itemsType: string;
-}
-
-export interface AddDefineParams extends RegistryItem {
-}
-
-const gDefine: Record<string, DefineItem> = {};
+const gRegistry: Record<string, RegistryItem> = {};
 const gReplacing: Record<string, ReplaceItem> = {};
-const gComposites: Record<string, Composite> = {};
 
-export function requireDefine(uid: string): DefineItem {
-    let entry = gDefine[uid];
+export function requireRegistryItem<T extends RegistryItem>(uid: string): T {
+    let entry = gRegistry[uid];
     if (!entry) throw declareError("The UID " + uid + " is required but not defined");
-    return entry;
+    return entry as T;
 }
 
 export function addReplace(mustReplace: string, replaceWith: string, priority: PriorityLevel|undefined, declarationFile: string) {
@@ -144,158 +129,71 @@ export function addReplace(mustReplace: string, replaceWith: string, priority: P
     if (LOG) console.log("Add REPLACE", mustReplace, "=>", replaceWith, "priority", priority);
 }
 
-export function addDefine(p: AddDefineParams) {
-    if (gDefine[p.uid]) {
-        throw declareError("The UID " + p.uid + " is already defined", gDefine[p.uid].itemPath);
-    }
+export function addToRegistry<T extends RegistryItem>(keys: string[], item: T) {
+    for (let key of keys) {
+        if (gRegistry[key]) {
+            throw declareError("The item " + key + " is already defined", gRegistry[key].itemPath);
+        }
 
-    for (let alias of p.alias) {
-        if (gDefine[alias]) {
-            throw declareError("The alias " + alias + " is already defined", p.itemPath);
+        gRegistry[key] = item;
+
+        if (LOG) {
+            const relPath = jk_fs.getRelativePath(gSrcRootDir, item.itemPath);
+            console.log(`Add @${item.arobaseType.typeName}:${key} to registry. Path: ${relPath}`);
         }
     }
-
-    gDefine[p.uid] = p;
-    for (let alias of p.alias) gDefine[alias] = p;
-
-    if (LOG) {
-        const relPath = jk_fs.getRelativePath(gSrcRootDir, p.itemPath);
-        console.log("Add DEFINE", p.uid, "=>", relPath);
-        for (let alias of p.alias) console.log("Add ALIAS", alias, "=>", p.uid);
-    }
-}
-
-export function addComposite(uid: string, items: CompositeItem[], dirPath: string, itemsType: string) {
-    let current = gComposites[uid];
-
-    if (!current) {
-        gComposites[uid] = {uid, allDirPath: [dirPath], items, itemsType};
-        return;
-    }
-
-    if (current.itemsType !== itemsType) {
-        throw declareError(`The composite ${uid} is already defined with a different item type (${current.itemsType})`, dirPath);
-    }
-
-    current.allDirPath.push(dirPath);
-    current.items.push(...items);
 }
 
 //endregion
 
 //region Generating code
 
-async function generateDefines() {
-    async function generateDefine(itemId: string, entry: DefineItem) {
-        let newFilePath: string;
-
-        if (USE_FLAT_OUTPUT) {
-            newFilePath = jk_fs.join(gGenRootDir, "id", itemId);
-        } else {
-            newFilePath = jk_fs.join(gGenRootDir, "id", entry.itemType, itemId);
-        }
-
-        await createLink_Symlink(newFilePath, jk_fs.dirname(entry.entryPoint));
-    }
-
-    for (let key in gDefine) {
-        const entry = gDefine[key];
-        await generateDefine(key, entry);
-    }
-}
-
-async function generateComposites() {
-    async function emitComposite(composite: Composite) {
-        composite.items = sortByPriority(composite.items);
-
-        let source = "";
-        let count = 1;
-
-        let outDir: string;
-        if (USE_FLAT_OUTPUT) outDir = jk_fs.join(gGenRootDir, "id");
-        else outDir = jk_fs.join(gGenRootDir, "id", "@composite", composite.itemsType);
-
-        for (let item of composite.items) {
-            let entryPoint = item.entryPoint;
-
-            if (!entryPoint) {
-                let d = requireDefine(item.ref!);
-                entryPoint = d.entryPoint;
-            }
-
-            entryPoint = jk_fs.getRelativePath(outDir, entryPoint);
-            source += `import I${count++} from "${entryPoint}";\n`;
-        }
-
-        let max = composite.items.length;
-        source += "\nexport const C = [";
-        for (let i=1;i<=max;i++) source += `I${i},`;
-        source += "];";
-
-        await genWriteFile(jk_fs.join(outDir, composite.uid + ".ts"), source);
-    }
-
-    function sortByPriority(items: CompositeItem[]): CompositeItem[] {
-        function addPriority(priority: PriorityLevel) {
-            let e = byPriority[priority];
-            if (e) items.push(...e);
-        }
-
-        const byPriority: any = {};
-
-        for (let item of items) {
-            if (!byPriority[item.priority]) byPriority[item.priority] = [];
-            byPriority[item.priority].push(item);
-        }
-
-        items = [];
-
-        addPriority(PriorityLevel.veryHigh);
-        addPriority(PriorityLevel.high);
-        addPriority(PriorityLevel.default);
-        addPriority(PriorityLevel.low);
-        addPriority(PriorityLevel.veryLow);
-
-        return items;
-    }
-
-    for (let composite of Object.values(gComposites)) {
-        await emitComposite(composite);
-    }
-}
-
 async function generateAll() {
     function applyReplaces() {
         for (let mustReplace in gReplacing) {
-            let replaceItem = gReplacing[mustReplace];
+            let replaceParams = gReplacing[mustReplace];
 
-            let mustReplaceRef = gDefine[mustReplace];
-            let replaceWithRef = gDefine[replaceItem.replaceWith];
-
-            if (!mustReplaceRef) {
-                let message =   "Can't find the UID to replace : " + mustReplace +
+            let itemToReplaceRef = gRegistry[mustReplace];
+            //
+            if (!itemToReplaceRef) {
+                let message =  "Can't find the UID to replace : " + mustReplace +
                     "\nCheck that the item is declared in a @defines clause";
 
-                if (replaceItem.mustReplaceIsUID) {
-                    throw declareError(message, replaceItem.declarationFile);
+                if (replaceParams.mustReplaceIsUID) {
+                    throw declareError(message, replaceParams.declarationFile);
                 }
 
                 message = message.replace("UID", "alias");
-                throw declareError(message, replaceItem.declarationFile);
+                throw declareError(message, replaceParams.declarationFile);
             }
 
+            let replaceWithRef = gRegistry[replaceParams.replaceWith];
+            //
             if (!replaceWithRef) {
-                if (replaceItem.replaceWithIsUID) throw declareError("Can't find the UID used for replacement : " + replaceItem.replaceWith, replaceItem.declarationFile);
-                throw declareError("Can't find the alias used for replacement : " + replaceItem.replaceWith, replaceItem.declarationFile);
+                if (replaceParams.replaceWithIsUID) throw declareError("Can't find the UID used for replacement : " + replaceParams.replaceWith, replaceParams.declarationFile);
+                throw declareError("Can't find the alias used for replacement : " + replaceParams.replaceWith, replaceParams.declarationFile);
             }
 
-            gDefine[mustReplace] = replaceWithRef;
+            if (itemToReplaceRef.arobaseType!==replaceWithRef.arobaseType) {
+                throw declareError(`Try to replace an element of type ${itemToReplaceRef.arobaseType.typeName} with an element of type ${replaceWithRef.arobaseType.typeName}`, replaceParams.declarationFile);
+            }
+
+            gRegistry[mustReplace] = replaceWithRef;
         }
     }
 
     applyReplaces();
-    await generateDefines();
-    await generateComposites();
+
+    const infos = {genDir: gGenRootDir};
+
+    for (let arobaseType of Object.values(gArobaseHandler)) {
+        for (let key in gRegistry) {
+            const entry = gRegistry[key];
+            if (entry.arobaseType === arobaseType) {
+                await entry.arobaseType.itemProcessor(key, entry, infos);
+            }
+        }
+    }
 }
 
 //endregion
@@ -578,34 +476,20 @@ async function processModule(moduleDir: string) {
 
 //region Extensions
 
-export interface ArobaseDirHandlerParams {
-    moduleDir: string;
-    arobaseDir: string;
-    genDir: string;
-}
-
-export type CustomTypeHandler = (p: { moduleDir: string, dirToScan: string, genDir: string }) => Promise<void>;
-export type ArobaseDirScanner = (p: ArobaseDirHandlerParams) => Promise<void>;
-export type ArobaseItemProcessor = (p: DefineItem) => Promise<void>;
+export type ArobaseDirScanner = (infos: { moduleDir: string; arobaseDir: string; genDir: string; }) => Promise<void>;
+export type ArobaseItemProcessor = (key: string, item: RegistryItem, infos: { genDir: string; }) => Promise<void>;
 
 export interface ArobaseType {
+    typeName: string;
     dirScanner: ArobaseDirScanner;
     itemProcessor: ArobaseItemProcessor
 }
 
-let gCustomTypeHandlers: Record<string, CustomTypeHandler> = {};
 let gArobaseHandler: Record<string, ArobaseType> = {};
 
-/**
- * Allows hacking how the `@defines/customType` items are processed.
- */
-export function addCustomTypeHandler(customType: string, handler: CustomTypeHandler) {
-    gCustomTypeHandlers[customType] = handler;
-}
-
-export function addArobaseType(name: string, p: ArobaseType) {
+export function addArobaseType(name: string, type: Omit<ArobaseType, "typeName">) {
     if (name.startsWith("@")) name = name.substring(1);
-    gArobaseHandler[name] = p;
+    return gArobaseHandler[name] = {...type, typeName: name};
 }
 
 //endregion
