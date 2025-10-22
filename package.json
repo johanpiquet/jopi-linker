@@ -13,12 +13,12 @@
   "types": "dist/index.d.ts",
   "type": "module",
   "scripts": {
-    "build": "npx tsc",
+    "_build": "npx tsc",
     "tsc": "npx tsc",
     "bun-publish": "npx tsc && bun publish",
     "clean": "rm -rf dist .turbo tsconfig.tsbuildinfo",
 
-    "start": "node dist/index.js"
+    "linker": "node dist/index.js"
   },
   "devDependencies": {
     "@types/bun": "latest",

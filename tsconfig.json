@@ -20,7 +20,14 @@
     "skipLibCheck": true,
     "noEmitOnError": false,
     "verbatimModuleSyntax": true,
-    "allowJs": false
+    "allowJs": false,
+
+    "paths": {
+      "@/events/*": ["./src/_jopiLinkerGen/events/*"],
+      "@/composites/*": ["./src/_jopiLinkerGen/composites/*"],
+      "@/uid/*": ["./src/_jopiLinkerGen/uid/*"],
+      "@/linker/*": ["./src/_jopiLinkerGen/*"]
+    }
   },
 
   "include": [
