@@ -27,5 +27,5 @@ addArobaseType("replaces", {
         }
     },
 
-    async codeGenerator(e) {}
+    async generateCodeForItem(e) {}
 });

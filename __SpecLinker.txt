@@ -78,39 +78,7 @@ Ils donnent lieu à une génération de fichiers dont le contenu est ainsi:
                                                                 ou le remplacer par un autre uid
 
 
-***************************************************************************************** Dossiers @events et @listeners
-
-Le dossier @events permet de définir un événement, et le dossier @listeners permet d'écouter cet évenement.
-
-/@listeners/eventUid/
-        /1_listenerA/index.tsx
-
-Génère ceci:
-    gEvent[uidEvent] = [listener1, listener2]
-
-    /_gen/uidEvent.ts
-            import L1 from "./path/to/listener1.ts";
-            import L2 from "./path/to/listener2.ts";
-            import * from jk_events;
-
-            jk_events.addEventListener("eventName", (e) => {
-                async function exec() {
-                    let r1 = L1(e);
-                    if (r1 instanceof Promise) await r1;
-                    if (e.canceled || e.isCatch) return;
-
-                    let r2 = L2(t);
-                    if (r2 instanceof Promise) await r2;
-                    //if (e.canceled || e.isCatch) return;
-                }
-
-                if (!e || !e.promises) throw new Error("Use of async event required");
-                e.promises.push(exec());
-            });
-
-On doit aussi avoir un global à inclure:
-    import * from jk_events;
-    jk_events.addEventListener(eventName, () => await import("./event.name/index.ts"));
+***************************************************************************************** Dossiers @listeners
 
 ************************************************************************************** Dossier racine @features (racine)
 

@@ -2,7 +2,7 @@ import * as jk_fs from "jopi-toolkit/jk_fs";
 import {
     addArobaseType,
     addToRegistry,
-    createLink_Symlink,
+    createDirSymlink,
     declareError,
     type RegistryItem,
     processThisDirItems
@@ -53,10 +53,10 @@ const arobaseType = addArobaseType("defines", {
         }
     },
 
-    async codeGenerator(key, rItem, infos) {
+    async generateCodeForItem(key, rItem, infos) {
         const item = rItem as DefineType;
         const newFilePath = jk_fs.join(infos.genDir, "id", key);
-        await createLink_Symlink(newFilePath, jk_fs.dirname(item.entryPoint));
+        await createDirSymlink(newFilePath, jk_fs.dirname(item.entryPoint));
     }
 });
 

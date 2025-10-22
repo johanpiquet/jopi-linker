@@ -46,7 +46,7 @@ const arobaseType = addArobaseType("composites", {
         }
     },
 
-    async codeGenerator(key, rItem, infos) {
+    async generateCodeForItem(key, rItem, infos) {
         function sortByPriority(items: CompositePart[]): CompositePart[] {
             function addPriority(priority: PriorityLevel) {
                 let e = byPriority[priority];

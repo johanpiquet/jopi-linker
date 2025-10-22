@@ -28,7 +28,9 @@
     "preserveSymlinks": false,
 
     "paths": {
-      "@/id/*": ["./src/_gen/id/*"]
+      "@/id/*": ["./src/_jopiLinkerGen/id/*"],
+      "@/events/*": ["./src/_jopiLinkerGen/events/*"],
+      "@/composites/*": ["./src/_jopiLinkerGen/composites/*"]
     }
   },
 

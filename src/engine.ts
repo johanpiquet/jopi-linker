@@ -8,24 +8,14 @@ const LOG = true;
 
 //region Helpers
 
-export async function genWriteFile(filePath: string, fileContent: string): Promise<void> {
-    await jk_fs.mkDir(jk_fs.dirname(filePath));
-    return jk_fs.writeTextToFile(filePath, fileContent);
-}
-
-export async function createLink_Import(newFilePath: string, targetFilePath: string) {
-    let relPath = jk_fs.getRelativePath(jk_fs.dirname(newFilePath), targetFilePath);
-    await genWriteFile(newFilePath, `import D from "${relPath}";\nexport default D;\n`);
-}
-
-export async function createLink_Symlink(newFilePath: string, targetFilePath: string) {
+export async function createDirSymlink(newFilePath: string, targetFilePath: string) {
     await jk_fs.mkDir(jk_fs.dirname(newFilePath));
-    await jk_fs.symlink(targetFilePath, newFilePath, "file");
+    await jk_fs.symlink(targetFilePath, newFilePath, "dir");
 }
 
-export async function resolveFile(sourceDirPath: string, fileNames: string[]): Promise<string|undefined> {
+export async function resolve(dirToSearch: string, fileNames: string[]): Promise<string|undefined> {
     for (let fileName of fileNames) {
-        let filePath = jk_fs.join(sourceDirPath, fileName);
+        let filePath = jk_fs.join(dirToSearch, fileName);
         if (await jk_fs.isFile(filePath)) return filePath;
     }
 
@@ -92,8 +82,8 @@ export interface ReplaceItem {
     declarationFile: string;
 }
 
-const gRegistry: Record<string, RegistryItem> = {};
-const gReplacing: Record<string, ReplaceItem> = {};
+let gRegistry: Record<string, RegistryItem> = {};
+let gReplacing: Record<string, ReplaceItem> = {};
 
 export function requireRegistryItem<T extends RegistryItem>(key: string, requireType?: ArobaseType): T {
     const entry = gRegistry[key];
@@ -126,13 +116,9 @@ export function addReplace(mustReplace: string, replaceWith: string, priority: P
     if (LOG) console.log("Add REPLACE", mustReplace, "=>", replaceWith, "priority", priority);
 }
 
-export function errorAlreadyDefined(key: string) {
-    return declareError("The item " + key + " is already defined", gRegistry[key].itemPath);
-}
-
 export function addToRegistry<T extends RegistryItem>(keys: string[], item: T) {
     for (let key of keys) {
-        if (gRegistry[key]) throw errorAlreadyDefined(key);
+        if (gRegistry[key]) declareError("The item " + key + " is already defined", gRegistry[key].itemPath);
 
         gRegistry[key] = item;
 
@@ -146,6 +132,27 @@ export function addToRegistry<T extends RegistryItem>(keys: string[], item: T) {
 //endregion
 
 //region Generating code
+
+let gInstallFile_imports = "";
+let gInstallFile_body = "";
+let gInstallFile_footer = "";
+
+export async function genWriteFile(filePath: string, fileContent: string): Promise<void> {
+    await jk_fs.mkDir(jk_fs.dirname(filePath));
+    return jk_fs.writeTextToFile(filePath, fileContent);
+}
+
+export function genAddToInstaller_imports(text: string) {
+    gInstallFile_imports += text;
+}
+
+export function genAddToInstaller_body(text: string) {
+    gInstallFile_body += text;
+}
+
+export function genAddToInstaller_footer(text: string) {
+    gInstallFile_footer += text;
+}
 
 async function generateAll() {
     function applyReplaces() {
@@ -186,13 +193,38 @@ async function generateAll() {
     const infos = {genDir: gGenRootDir};
 
     for (let arobaseType of Object.values(gArobaseHandler)) {
+        if (arobaseType.beginGeneratingCode) {
+            await arobaseType.beginGeneratingCode();
+        }
+
         for (let key in gRegistry) {
             const entry = gRegistry[key];
             if (entry.arobaseType === arobaseType) {
-                await entry.arobaseType.codeGenerator(key, entry, infos);
+                await entry.arobaseType.generateCodeForItem(key, entry, infos);
             }
         }
+
+        if (arobaseType.endGeneratingCode) {
+            await arobaseType.endGeneratingCode();
+        }
     }
+
+    let installerFile = gInstallFile_imports;
+    installerFile += "export default async function() {";
+    installerFile += gInstallFile_body;
+    installerFile += "\n}";
+    installerFile += gInstallFile_footer;
+
+    await jk_fs.writeTextToFile(jk_fs.join(gGenRootDir, "install.ts"), installerFile);
+
+    // > Clean the resources
+
+    gInstallFile_imports = "";
+    gInstallFile_body = "";
+    gInstallFile_footer = "";
+
+    gRegistry = {};
+    gReplacing = {};
 }
 
 //endregion
@@ -345,7 +377,7 @@ export async function resolveAndTransformChildDir(p: ChildDirResolveAndTransform
     //
     if (p.childDir_filesToResolve) {
         for (let key in p.childDir_filesToResolve) {
-            resolved[key] = await resolveFile(itemPath, p.childDir_filesToResolve[key]);
+            resolved[key] = await resolve(itemPath, p.childDir_filesToResolve[key]);
         }
     }
 
@@ -452,6 +484,8 @@ async function processModules() {
 
     for (let module of modules) {
         if (!module.isDirectory) continue;
+        if (!module.name.startsWith("mod_")) continue;
+
         await processModule(module.fullPath);
     }
 }
@@ -482,7 +516,9 @@ export type ArobaseItemProcessor = (key: string, item: RegistryItem, infos: { ge
 export interface ArobaseType {
     typeName: string;
     processDir: ArobaseDirScanner;
-    codeGenerator: ArobaseItemProcessor
+    generateCodeForItem: ArobaseItemProcessor;
+    beginGeneratingCode?: () => Promise<void>;
+    endGeneratingCode?: () => Promise<void>;
 }
 
 let gArobaseHandler: Record<string, ArobaseType> = {};
@@ -499,6 +535,10 @@ export function addArobaseType(name: string, type: Omit<ArobaseType, "typeName">
 let gProjectRootDir: string;
 let gGenRootDir: string;
 let gSrcRootDir: string;
+
+export function getProjectGenDir() {
+    return gGenRootDir;
+}
 
 export async function compile() {
     async function searchLinkerScript(): Promise<string|undefined> {
@@ -518,7 +558,7 @@ export async function compile() {
     gProjectRootDir = jk_fs.resolve(gProjectRootDir, "sampleProject");
 
     gSrcRootDir = jk_fs.join(gProjectRootDir, "src");
-    gGenRootDir = jk_fs.join(gSrcRootDir, "_gen");
+    gGenRootDir = jk_fs.join(gSrcRootDir, "_jopiLinkerGen");
 
     let jopiLinkerScript = await searchLinkerScript();
     if (jopiLinkerScript) await import(jopiLinkerScript);

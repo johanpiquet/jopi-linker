@@ -7,7 +7,7 @@ import {
     declareError, genWriteFile, getRegistryItem,
     getSortedDirItem,
     type DirTransformParams, PriorityLevel, type RegistryItem, requireRegistryItem, resolveAndTransformChildDir,
-    processThisDirItems
+    processThisDirItems, getProjectGenDir, genAddToInstaller_body, genAddToInstaller_imports
 } from "./engine.ts";
 
 export interface ListenerType extends RegistryItem {
@@ -44,7 +44,7 @@ const arobaseType = addArobaseType("listeners", {
         }
     },
 
-    async codeGenerator(key, rItem, infos) {
+    async generateCodeForItem(key, rItem, infos) {
         function sortByPriority(items: ListenerPart[]): ListenerPart[] {
             function addPriority(priority: PriorityLevel) {
                 let e = byPriority[priority];
@@ -107,12 +107,16 @@ const arobaseType = addArobaseType("listeners", {
         source += "\n   e.promises.push(exec());";
         source += "\n});";      // addListener
 
-
-
         let fileName = key.substring(key.indexOf("_") + 1) + ".ts";
         await genWriteFile(jk_fs.join(outDir, fileName), source);
+
+        genAddToInstaller_body(`\nawait import("@/events/${event.eventName}");`);
     }
 });
+
+function calcEventDir(eventName: string) {
+    return jk_fs.join(getProjectGenDir(), "events", eventName);
+}
 
 async function transformEventListener(p: DirTransformParams) {
     let eventName = p.parentDirName;

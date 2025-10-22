@@ -1,10 +1,7 @@
 .idea
 node_modules
-temp
 .DS_Store
-__TODO.txt
-logs
 .turbo
 dist
 /tsconfig.tsbuildinfo
-temp
+_jopiLinkerGen
