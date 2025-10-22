@@ -23,6 +23,8 @@ export interface ListenerPart {
     sortKey: string;
 }
 
+let gEvents: string[] = [];
+
 const arobaseType = addArobaseType("listeners", {
     async processDir(p) {
         let allEventDir = await jk_fs.listDir(p.arobaseDir);
@@ -88,29 +90,37 @@ const arobaseType = addArobaseType("listeners", {
             source += `import E${count++} from "${entryPoint}";\n`;
         }
 
-        source += `import {addListener} from "jopi-toolkit/jk_events";\n`;
+        source += "\nexport default async function(e: any) {";
 
         let max = event.listeners.length;
-        source += "\naddListener(`" + event.eventName + "`, (e) => {";
-        source += "\n   async function exec() {";
 
         for (let i = 1; i <= max; i++) {
-            source += `\n       let r${i}: any = E${i}(e);`;
-            source += `\n       if (r${i} instanceof Promise) await r${i};`;
-            source += `\n       if (e.canceled || e.isCatch) return;`
+            source += `\n   let r${i}: any = E${i}(e);`;
+            source += `\n   if (r${i} instanceof Promise) await r${i};`;
+            source += `\n   if (e.canceled || e.isCatch) return;`
         }
 
-        source += "\n   }";        // exec
-        source += "\n";
-
-        source += `\n   if (!e || !e.promises) throw new Error("Use of async event required");`;
-        source += "\n   e.promises.push(exec());";
-        source += "\n});";      // addListener
+        source += "\n}";
 
         let fileName = key.substring(key.indexOf("_") + 1) + ".ts";
         await genWriteFile(jk_fs.join(outDir, fileName), source);
 
-        genAddToInstaller_body(`\nawait import("@/events/${event.eventName}");`);
+        gEvents.push(event.eventName);
+    },
+
+    async endGeneratingCode() {
+        genAddToInstaller_imports(`import {addListener} from "jopi-toolkit/jk_events";\n`);
+        let count = 0;
+        for (let eventName of gEvents) {
+            count++;
+
+            genAddToInstaller_body(`
+    let E${count}: undefined | ((event: any) => Promise<void>);
+    addListener("myEvent", async (e) => {
+        if (!E${count}) E${count} = (await import("@/events/${eventName}")).default;       
+        await E${count}(e);
+    });`                        ); // genAddToInstaller_body
+        }
     }
 });
 
