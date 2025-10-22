@@ -25,7 +25,7 @@
     "paths": {
       "@/events/*": ["./src/_jopiLinkerGen/events/*"],
       "@/composites/*": ["./src/_jopiLinkerGen/composites/*"],
-      "@/uid/*": ["./src/_jopiLinkerGen/uid/*"],
+      "@/chunk/*": ["./src/_jopiLinkerGen/uid/*"],
       "@/linker/*": ["./src/_jopiLinkerGen/*"]
     }
   },
