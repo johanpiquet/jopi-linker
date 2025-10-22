@@ -1,0 +1,645 @@
+import * as jk_fs from "jopi-toolkit/jk_fs";
+import * as jk_tools from "jopi-toolkit/jk_tools";
+import * as jk_term from "jopi-toolkit/jk_term";
+import * as jk_app from "jopi-toolkit/jk_app";
+import * as jk_what from "jopi-toolkit/jk_what";
+
+const LOG = false;
+const USE_FLAT_OUTPUT = true;
+
+//region Helpers
+
+export async function genWriteFile(filePath: string, fileContent: string): Promise<void> {
+    await jk_fs.mkDir(jk_fs.dirname(filePath));
+    return jk_fs.writeTextToFile(filePath, fileContent);
+}
+
+export async function createLink_Import(newFilePath: string, targetFilePath: string) {
+    let relPath = jk_fs.getRelativePath(jk_fs.dirname(newFilePath), targetFilePath);
+    await genWriteFile(newFilePath, `import D from "${relPath}";\nexport default D;\n`);
+}
+
+export async function createLink_Symlink(newFilePath: string, targetFilePath: string) {
+    await jk_fs.mkDir(jk_fs.dirname(newFilePath));
+    await jk_fs.symlink(targetFilePath, newFilePath, "file");
+}
+
+export async function resolveFile(sourceDirPath: string, fileNames: string[]): Promise<string|undefined> {
+    for (let fileName of fileNames) {
+        let filePath = jk_fs.join(sourceDirPath, fileName);
+        if (await jk_fs.isFile(filePath)) return filePath;
+    }
+
+    return undefined;
+}
+
+export function declareError(message: string, filePath?: string): Error {
+    jk_term.logBgRed("⚠️ Error -", message, "⚠️");
+    if (filePath) jk_term.logBlue("See:", jk_fs.pathToFileURL(filePath));
+    process.exit(1);
+}
+
+export function addNameIntoFile(filePath: string) {
+    jk_fs.writeTextToFile(filePath, jk_fs.basename(filePath)).catch();
+}
+
+export async function getSortedDirItem(dirPath: string): Promise<jk_fs.DirItem[]> {
+    const items = await jk_fs.listDir(dirPath);
+    return items.sort((a, b) => a.name.localeCompare(b.name));
+}
+
+/**
+ * This function checks the validity of a directory item
+ * and allows to know if we must skip this item.
+ */
+export async function checkDirItem(entry: jk_fs.DirItem, allowRefFile: boolean) {
+    if (entry.isSymbolicLink) return false;
+    if ((entry.name[0] === ".") || (entry.name[0] === "_")) return false;
+
+    if (!allowRefFile && entry.name.endsWith(".ref")) {
+        throw declareError("A .ref file is found here but not expected", entry.fullPath);
+    }
+
+    // _ allows generating an UID replacing the item.
+    //
+    if (entry.name === "uid.myuid") {
+        let uid = jk_tools.generateUUIDv4();
+        let newPath = jk_fs.join(jk_fs.dirname(entry.fullPath), uid + ".myuid");
+        await jk_fs.rename(entry.fullPath, newPath);
+        entry.fullPath = newPath;
+        entry.name = uid;
+    }
+
+    return true;
+}
+
+//endregion
+
+//region Registry
+
+export interface RegistryItem {
+    uid: string;
+    alias: string[];
+    itemPath: string;
+    entryPoint: string;
+    itemType: string;
+}
+
+export interface DefineItem extends RegistryItem {
+}
+
+export interface ReplaceItem {
+    mustReplace: string;
+    mustReplaceIsUID: boolean;
+
+    replaceWith: string;
+    replaceWithIsUID: boolean;
+
+    priority: PriorityLevel;
+    declarationFile: string;
+}
+
+export interface CompositeItem {
+    ref?: string;
+    entryPoint?: string;
+    priority: PriorityLevel;
+    sortKey: string;
+}
+
+export interface Composite {
+    uid: string;
+    allDirPath: string[];
+    items: CompositeItem[];
+    itemsType: string;
+}
+
+export interface AddDefineParams extends RegistryItem {
+}
+
+const gDefine: Record<string, DefineItem> = {};
+const gReplacing: Record<string, ReplaceItem> = {};
+const gComposites: Record<string, Composite> = {};
+
+export function requireDefine(uid: string): DefineItem {
+    let entry = gDefine[uid];
+    if (!entry) throw declareError("The UID " + uid + " is required but not defined");
+    return entry;
+}
+
+export function addReplace(mustReplace: string, replaceWith: string, priority: PriorityLevel|undefined, declarationFile: string) {
+    if (!priority) priority = PriorityLevel.default;
+    let current = gReplacing[mustReplace];
+
+    if (current) {
+        if (current.priority>priority) return;
+    }
+
+    gReplacing[mustReplace] = {
+        declarationFile,
+        mustReplace, replaceWith, priority,
+        mustReplaceIsUID: jk_tools.isUUIDv4(mustReplace),
+        replaceWithIsUID: jk_tools.isUUIDv4(replaceWith)
+    };
+
+    if (LOG) console.log("Add REPLACE", mustReplace, "=>", replaceWith, "priority", priority);
+}
+
+export function addDefine(p: AddDefineParams) {
+    if (gDefine[p.uid]) {
+        throw declareError("The UID " + p.uid + " is already defined", gDefine[p.uid].itemPath);
+    }
+
+    for (let alias of p.alias) {
+        if (gDefine[alias]) {
+            throw declareError("The alias " + alias + " is already defined", p.itemPath);
+        }
+    }
+
+    gDefine[p.uid] = p;
+    for (let alias of p.alias) gDefine[alias] = p;
+
+    if (LOG) {
+        const relPath = jk_fs.getRelativePath(gSrcRootDir, p.itemPath);
+        console.log("Add DEFINE", p.uid, "=>", relPath);
+        for (let alias of p.alias) console.log("Add ALIAS", alias, "=>", p.uid);
+    }
+}
+
+export function addComposite(uid: string, items: CompositeItem[], dirPath: string, itemsType: string) {
+    let current = gComposites[uid];
+
+    if (!current) {
+        gComposites[uid] = {uid, allDirPath: [dirPath], items, itemsType};
+        return;
+    }
+
+    if (current.itemsType !== itemsType) {
+        throw declareError(`The composite ${uid} is already defined with a different item type (${current.itemsType})`, dirPath);
+    }
+
+    current.allDirPath.push(dirPath);
+    current.items.push(...items);
+}
+
+//endregion
+
+//region Generating code
+
+async function generateDefines() {
+    async function generateDefine(itemId: string, entry: DefineItem) {
+        let newFilePath: string;
+
+        if (USE_FLAT_OUTPUT) {
+            newFilePath = jk_fs.join(gGenRootDir, "id", itemId);
+        } else {
+            newFilePath = jk_fs.join(gGenRootDir, "id", entry.itemType, itemId);
+        }
+
+        await createLink_Symlink(newFilePath, jk_fs.dirname(entry.entryPoint));
+    }
+
+    for (let key in gDefine) {
+        const entry = gDefine[key];
+        await generateDefine(key, entry);
+    }
+}
+
+async function generateComposites() {
+    async function emitComposite(composite: Composite) {
+        composite.items = sortByPriority(composite.items);
+
+        let source = "";
+        let count = 1;
+
+        let outDir: string;
+        if (USE_FLAT_OUTPUT) outDir = jk_fs.join(gGenRootDir, "id");
+        else outDir = jk_fs.join(gGenRootDir, "id", "@composite", composite.itemsType);
+
+        for (let item of composite.items) {
+            let entryPoint = item.entryPoint;
+
+            if (!entryPoint) {
+                let d = requireDefine(item.ref!);
+                entryPoint = d.entryPoint;
+            }
+
+            entryPoint = jk_fs.getRelativePath(outDir, entryPoint);
+            source += `import I${count++} from "${entryPoint}";\n`;
+        }
+
+        let max = composite.items.length;
+        source += "\nexport const C = [";
+        for (let i=1;i<=max;i++) source += `I${i},`;
+        source += "];";
+
+        await genWriteFile(jk_fs.join(outDir, composite.uid + ".ts"), source);
+    }
+
+    function sortByPriority(items: CompositeItem[]): CompositeItem[] {
+        function addPriority(priority: PriorityLevel) {
+            let e = byPriority[priority];
+            if (e) items.push(...e);
+        }
+
+        const byPriority: any = {};
+
+        for (let item of items) {
+            if (!byPriority[item.priority]) byPriority[item.priority] = [];
+            byPriority[item.priority].push(item);
+        }
+
+        items = [];
+
+        addPriority(PriorityLevel.veryHigh);
+        addPriority(PriorityLevel.high);
+        addPriority(PriorityLevel.default);
+        addPriority(PriorityLevel.low);
+        addPriority(PriorityLevel.veryLow);
+
+        return items;
+    }
+
+    for (let composite of Object.values(gComposites)) {
+        await emitComposite(composite);
+    }
+}
+
+async function generateAll() {
+    function applyReplaces() {
+        for (let mustReplace in gReplacing) {
+            let replaceItem = gReplacing[mustReplace];
+
+            let mustReplaceRef = gDefine[mustReplace];
+            let replaceWithRef = gDefine[replaceItem.replaceWith];
+
+            if (!mustReplaceRef) {
+                let message =   "Can't find the UID to replace : " + mustReplace +
+                    "\nCheck that the item is declared in a @defines clause";
+
+                if (replaceItem.mustReplaceIsUID) {
+                    throw declareError(message, replaceItem.declarationFile);
+                }
+
+                message = message.replace("UID", "alias");
+                throw declareError(message, replaceItem.declarationFile);
+            }
+
+            if (!replaceWithRef) {
+                if (replaceItem.replaceWithIsUID) throw declareError("Can't find the UID used for replacement : " + replaceItem.replaceWith, replaceItem.declarationFile);
+                throw declareError("Can't find the alias used for replacement : " + replaceItem.replaceWith, replaceItem.declarationFile);
+            }
+
+            gDefine[mustReplace] = replaceWithRef;
+        }
+    }
+
+    applyReplaces();
+    await generateDefines();
+    await generateComposites();
+}
+
+//endregion
+
+//region Processing dir
+
+export interface ChildDirProcessorParams {
+    itemType: string;
+
+    childDir_filesToResolve?: Record<string, string[]>;
+    childDir_requireRefFile?: boolean;
+    childDir_requireMyUidFile?: boolean;
+    childDir_createMissingMyUidFile?: boolean;
+    childDir_nameConstraint: "canBeUid"|"mustNotBeUid"|"mustBeUid";
+
+    itemProcessor: (props: ItemProcessorParams) => Promise<void>;
+}
+
+export interface DirProcessorParams extends ChildDirProcessorParams {
+    dirToScan: string;
+    dirToScan_expectFsType: "file"|"dir"|"fileOrDir";
+}
+
+export interface ItemProcessorParams {
+    itemName: string;
+    uid?: string;
+    alias: string[];
+    refFile?: string;
+
+    itemPath: string;
+    itemType: string;
+    isFile: boolean;
+    priority: PriorityLevel;
+
+    resolved: Record<string, string|undefined>;
+}
+
+export enum PriorityLevel {
+    veryLow = -200,
+    low = -100,
+    default = 0,
+    high = 100,
+    veryHigh = 200,
+}
+
+async function searchPriorityLevel(baseDir: string): Promise<PriorityLevel> {
+    function setPriority(level: PriorityLevel) {
+        if (priority) throw declareError("More than one priority file declared", baseDir);
+        priority = level;
+    }
+
+    let priority: PriorityLevel | undefined = undefined;
+
+    (await jk_fs.listDir(baseDir)).forEach(entry => {
+        if (!entry.isFile) return false;
+        if (!entry.name.startsWith("priority")) return false;
+
+        entry.name = entry.name.toLowerCase();
+        entry.name = entry.name.replace("-", "");
+        entry.name = entry.name.replace("_", "");
+
+        switch (entry.name) {
+            case "priorityveryhigh":
+                setPriority(PriorityLevel.veryHigh);
+                break;
+            case "priorityhigh":
+                setPriority(PriorityLevel.high);
+                break;
+            case "prioritydefault":
+                setPriority(PriorityLevel.default);
+                break;
+            case "prioritylow":
+                setPriority(PriorityLevel.low);
+                break;
+            case "priorityverylow":
+                setPriority(PriorityLevel.veryLow);
+                break;
+        }
+    });
+
+    if (!priority) return PriorityLevel.default;
+    return priority;
+}
+
+export async function scanDir(p: DirProcessorParams) {
+    let dirContent = await jk_fs.listDir(p.dirToScan);
+
+    for (let entry of dirContent) {
+        if (!await checkDirItem(entry, false)) continue
+
+        if (p.dirToScan_expectFsType === "file") {
+            if (entry.isFile) {
+                await scanChildDir(p, entry);
+            }
+        } else if (p.dirToScan_expectFsType === "dir") {
+            if (entry.isDirectory) {
+                await scanChildDir(p, entry);
+            }
+        } else if (p.dirToScan_expectFsType === "fileOrDir") {
+            await scanChildDir(p, entry);
+        }
+    }
+}
+
+export async function scanChildDir(p: ChildDirProcessorParams, dirItem: jk_fs.DirItem) {
+    const itemPath = dirItem.fullPath;
+    const itemName = dirItem.name;
+    const isFile = dirItem.isFile;
+
+    // The file / folder-name is a UUID4?
+    let isUUID = jk_tools.isUUIDv4(itemName);
+
+    if (isUUID) {
+        if (p.childDir_nameConstraint==="mustNotBeUid") {
+            throw declareError("The name must NOT be an UID", itemPath);
+        }
+    } else {
+        if (p.childDir_nameConstraint==="mustBeUid") {
+            throw declareError("The name MUST be an UID", itemPath);
+        }
+    }
+
+    // It's a file?
+    if (isFile) {
+        if ((p.childDir_requireMyUidFile===true) && !isUUID) {
+            throw declareError("The file name MUST be an UID", itemPath);
+        }
+
+        // Process it now.
+        await p.itemProcessor({
+            itemName,
+            uid: isUUID ? itemName : undefined,
+            alias: [],
+
+            priority: PriorityLevel.default,
+
+            itemPath, isFile,
+            itemType: p.itemType,
+
+            resolved: {}
+        });
+
+        return;
+    }
+
+    // Will search references to config.json / index.tsx / ...
+    //
+    let resolved: Record<string, string | undefined> = {};
+    //
+    if (p.childDir_filesToResolve) {
+        for (let key in p.childDir_filesToResolve) {
+            resolved[key] = await resolveFile(itemPath, p.childDir_filesToResolve[key]);
+        }
+    }
+
+    let itemUid: string|undefined;
+
+    // Search the "uid.myuid" file, which allows knowing the uid of the item.
+    //
+    (await jk_fs.listDir(itemPath)).forEach(entry => {
+        if (entry.isFile && entry.name.endsWith(".myuid")) {
+            if (itemUid) {
+                throw declareError("More than one UID file declared", entry.fullPath);
+            }
+
+            // "_.myduid" is a special file name, which is automatically renamed with a new uid.
+            // Is used to help the developer to avoid generating himself a new uid.
+            //
+            if (entry.name==="_.myuid") {
+                entry.name = jk_tools.generateUUIDv4() + ".myuid";
+                jk_fs.rename(entry.fullPath, jk_fs.join(jk_fs.dirname(entry.fullPath), entry.name));
+            }
+
+            itemUid = jk_fs.basename(entry.name, ".myuid");
+            addNameIntoFile(entry.fullPath);
+
+            return entry.fullPath;
+        }
+    });
+
+    if (!itemUid) {
+        // > Not "ui.myuid" found? Then add it.
+
+        if (p.childDir_createMissingMyUidFile) {
+            itemUid = jk_tools.generateUUIDv4();
+            await jk_fs.writeTextToFile(jk_fs.join(itemPath, itemUid + ".myuid"), itemUid);
+        }
+    }
+
+    let itemAlias: string[] = [];
+
+    // Search the alias.
+    (await jk_fs.listDir(itemPath)).forEach(entry => {
+        if (entry.isFile && entry.name.endsWith(".alias")) {
+            itemAlias.push(jk_fs.basename(entry.name, ".alias"));
+            addNameIntoFile(entry.fullPath);
+        }
+    });
+
+    // Search the ref file.
+    let refFile: string|undefined;
+    //
+    (await jk_fs.listDir(itemPath)).forEach(entry => {
+        if (entry.isFile && entry.name.endsWith(".ref")) {
+            if (refFile) throw declareError("More than one .ref file found", itemPath);
+            refFile = jk_fs.basename(entry.name, ".ref");
+            addNameIntoFile(entry.fullPath);
+        }
+    });
+
+    if (refFile) {
+        if (p.childDir_requireRefFile===false) {
+            throw declareError("A .ref file is NOT expected", itemPath);
+        }
+    } else {
+        if (p.childDir_requireRefFile===true) {
+            throw declareError("A .ref file is required", itemPath);
+        }
+    }
+
+    // File named "defaultPriority", "highPriority", ...
+    // allow giving a priority to the rule.
+    //
+    const priority: PriorityLevel = await searchPriorityLevel(itemPath);
+
+    if (itemUid) {
+        if (p.childDir_requireMyUidFile===false) {
+            throw declareError("A .myuid file is found here but NOT EXPECTED", itemPath);
+        }
+    }
+    else {
+        if (p.childDir_requireMyUidFile===true) {
+            throw declareError("A .myuid file is required", itemPath);
+        }
+    }
+
+    await p.itemProcessor({
+        itemName, uid: itemUid, alias: itemAlias, refFile,
+        itemPath, isFile, resolved, priority,
+        itemType: p.itemType
+    });
+}
+
+//endregion
+
+//region Processing project
+
+async function processProject() {
+    await jk_fs.rmDir(gGenRootDir);
+    await processModules();
+    await generateAll();
+}
+
+async function processModules() {
+    let modules = await jk_fs.listDir(gSrcRootDir);
+
+    for (let module of modules) {
+        if (!module.isDirectory) continue;
+        await processModule(module.fullPath);
+    }
+}
+
+async function processModule(moduleDir: string) {
+    let rootDirItem = await jk_fs.listDir(moduleDir);
+
+    for (let dirItem of rootDirItem) {
+        if (!dirItem.isDirectory) continue;
+
+        if (dirItem.name[0]==="@") {
+            let name = dirItem.name.substring(1);
+
+            let arobaseType = gArobaseHandler[name];
+            let params = { moduleDir, arobaseDir: dirItem.fullPath, genDir: gGenRootDir };
+            if (arobaseType) await arobaseType.dirScanner(params);
+        }
+    }
+}
+
+//endregion
+
+//region Extensions
+
+export interface ArobaseDirHandlerParams {
+    moduleDir: string;
+    arobaseDir: string;
+    genDir: string;
+}
+
+export type CustomTypeHandler = (p: { moduleDir: string, dirToScan: string, genDir: string }) => Promise<void>;
+export type ArobaseDirScanner = (p: ArobaseDirHandlerParams) => Promise<void>;
+export type ArobaseItemProcessor = (p: DefineItem) => Promise<void>;
+
+export interface ArobaseType {
+    dirScanner: ArobaseDirScanner;
+    itemProcessor: ArobaseItemProcessor
+}
+
+let gCustomTypeHandlers: Record<string, CustomTypeHandler> = {};
+let gArobaseHandler: Record<string, ArobaseType> = {};
+
+/**
+ * Allows hacking how the `@defines/customType` items are processed.
+ */
+export function addCustomTypeHandler(customType: string, handler: CustomTypeHandler) {
+    gCustomTypeHandlers[customType] = handler;
+}
+
+export function addArobaseType(name: string, p: ArobaseType) {
+    if (name.startsWith("@")) name = name.substring(1);
+    gArobaseHandler[name] = p;
+}
+
+//endregion
+
+//region Bootstrap
+
+let gProjectRootDir: string;
+let gGenRootDir: string;
+let gSrcRootDir: string;
+
+export async function compile() {
+    async function searchLinkerScript(): Promise<string|undefined> {
+        let jopiLinkerScript = jk_fs.join(gProjectRootDir, "dist", "jopi-linker.js");
+        if (await jk_fs.isFile(jopiLinkerScript)) return jopiLinkerScript;
+
+        if (jk_what.isBunJS) {
+            jopiLinkerScript = jk_fs.join(gSrcRootDir, "jopi-linker.ts");
+            if (await jk_fs.isFile(jopiLinkerScript)) return jopiLinkerScript;
+        }
+
+        return undefined;
+    }
+
+    gProjectRootDir = jk_app.findPackageJsonDir();
+
+    gProjectRootDir = jk_fs.resolve(gProjectRootDir, "sampleProject");
+
+    gSrcRootDir = jk_fs.join(gProjectRootDir, "src");
+    gGenRootDir = jk_fs.join(gSrcRootDir, "_gen");
+
+    let jopiLinkerScript = await searchLinkerScript();
+    if (jopiLinkerScript) await import(jopiLinkerScript);
+
+    await processProject();
+}
+
+//endregion

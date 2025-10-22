@@ -1,4 +1,4 @@
-import {addCustomTypeHandler} from "../../dist/index.js";
+import {addCustomTypeHandler} from "../../dist/engine.js";
 
 console.log("🎉 Inside jopi-linker.ts 🎉");
 

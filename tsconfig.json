@@ -30,13 +30,9 @@
   ],
 
   "exclude": [
-    "templates",
+    "sampleProject",
     "node_modules",
     "dist",
-    "**/*.spec.ts",
-    "**/*.spec.tsx",
-    "**/*.test.ts",
-    "**/*.test.tsx",
     "**/.turbo",
     "**/.cache"
   ]
