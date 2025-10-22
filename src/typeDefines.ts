@@ -8,26 +8,24 @@ import {
     scanDir
 } from "./engine.ts";
 
-export interface DefineItem extends RegistryItem {
-    uid: string;
-    alias: string[];
+export interface DefineType extends RegistryItem {
     entryPoint: string;
     itemType: string;
 }
 
 const arobaseType = addArobaseType("defines", {
     async dirScanner(p) {
-        let itemTypes = await jk_fs.listDir(p.arobaseDir);
+        let allChildDir = await jk_fs.listDir(p.arobaseDir);
 
-        for (let itemType of itemTypes) {
-            if ((itemType.name[0]==='_') || (itemType.name[0]==='.')) continue;
+        for (let childDir of allChildDir) {
+            if ((childDir.name[0]==='_') || (childDir.name[0]==='.')) continue;
 
             await scanDir({
-                dirToScan: itemType.fullPath,
+                dirToScan: childDir.fullPath,
                 dirToScan_expectFsType: "dir",
                 childDir_nameConstraint: "mustNotBeUid",
 
-                itemType: itemType.name,
+                itemType: childDir.name,
 
                 childDir_requireMyUidFile: true,
                 childDir_requireRefFile: false,
@@ -42,22 +40,21 @@ const arobaseType = addArobaseType("defines", {
                         throw declareError("No 'index.ts' or 'index.tsx' file found", props.itemPath);
                     }
 
-                    addToRegistry([props.uid!, ...props.alias], {
+                    const newItem: DefineType = {
                         arobaseType: arobaseType,
-
-                        uid: props.uid!,
-                        alias: props.alias,
                         entryPoint: props.resolved.entryPoint,
                         itemType: props.itemType,
                         itemPath: props.itemPath,
-                    });
+                    };
+
+                    addToRegistry([props.uid!, ...props.alias], newItem);
                 }
             });
         }
     },
 
     async itemProcessor(key, rItem, infos) {
-        const item = rItem as DefineItem;
+        const item = rItem as DefineType;
         const newFilePath = jk_fs.join(infos.genDir, "id", key);
         await createLink_Symlink(newFilePath, jk_fs.dirname(item.entryPoint));
     }

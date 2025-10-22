@@ -1,5 +1,5 @@
 import * as jk_fs from "jopi-toolkit/jk_fs";
-import defineArobaseType, {type DefineItem} from "./typeDefines.ts";
+import defineArobaseType, {type DefineType} from "./typeDefines.ts";
 
 import {
     addArobaseType, addToRegistry,
@@ -10,14 +10,13 @@ import {
     scanDir
 } from "./engine.ts";
 
-export interface Composite extends RegistryItem {
-    uid: string;
+export interface CompositeType extends RegistryItem {
     allDirPath: string[];
-    items: CompositeItem[];
+    items: CompositePart[];
     itemsType: string;
 }
 
-export interface CompositeItem  {
+export interface CompositePart {
     ref?: string;
     entryPoint?: string;
     priority: PriorityLevel;
@@ -48,7 +47,7 @@ const arobaseType = addArobaseType("composites", {
     },
 
     async itemProcessor(key, rItem, infos) {
-        function sortByPriority(items: CompositeItem[]): CompositeItem[] {
+        function sortByPriority(items: CompositePart[]): CompositePart[] {
             function addPriority(priority: PriorityLevel) {
                 let e = byPriority[priority];
                 if (e) items.push(...e);
@@ -72,7 +71,7 @@ const arobaseType = addArobaseType("composites", {
             return items;
         }
 
-        const composite = rItem as Composite;
+        const composite = rItem as CompositeType;
         composite.items = sortByPriority(composite.items);
 
         let source = "";
@@ -84,7 +83,7 @@ const arobaseType = addArobaseType("composites", {
             let entryPoint = item.entryPoint;
 
             if (!entryPoint) {
-                let d = requireRegistryItem<DefineItem>(item.ref!, defineArobaseType);
+                let d = requireRegistryItem<DefineType>(item.ref!, defineArobaseType);
                 entryPoint = d.entryPoint;
             }
 
@@ -103,9 +102,11 @@ const arobaseType = addArobaseType("composites", {
 
 async function processComposite(p: ItemProcessorParams) {
     let compositeId = p.uid!;
-    const dirItems = await getSortedDirItem(p.itemPath);
 
-    let compositeItems: CompositeItem[] = [];
+    // > Extract the composite items.
+
+    const dirItems = await getSortedDirItem(p.itemPath);
+    let compositeItems: CompositePart[] = [];
 
     const params: ChildDirProcessorParams = {
         itemType: p.itemType,
@@ -136,23 +137,26 @@ async function processComposite(p: ItemProcessorParams) {
         await scanChildDir(params, dirItem);
     }
 
-    addComposite(compositeId, compositeItems, p.itemPath, p.itemType);
-}
+    // > Add the composite.
 
-function addComposite(uid: string, items: CompositeItem[], itemPath: string, itemsType: string) {
-    let current = getRegistryItem<Composite>(uid, arobaseType);
+    let current = getRegistryItem<CompositeType>(compositeId, arobaseType);
 
     if (!current) {
-        addToRegistry([uid], {uid, allDirPath: [itemPath], items, itemsType, arobaseType, itemPath});
+        const newItem: CompositeType = {
+            arobaseType, itemPath: p.itemPath,
+            items: compositeItems, itemsType: p.itemType, allDirPath: [p.itemPath]
+        };
+
+        addToRegistry([compositeId], newItem);
         return;
     }
 
-    if (current.itemsType !== itemsType) {
-        throw declareError(`The composite ${uid} is already defined and has a different type: ${current.itemsType}`, itemPath);
+    if (current.itemsType !== p.itemType) {
+        throw declareError(`The composite ${compositeId} is already defined and has a different type: ${current.itemsType}`, p.itemPath);
     }
 
-    current.allDirPath.push(itemPath);
-    current.items.push(...items);
+    current.allDirPath.push(p.itemPath);
+    current.items.push(...compositeItems);
 }
 
 export default arobaseType;
