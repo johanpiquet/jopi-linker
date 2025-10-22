@@ -189,7 +189,7 @@ async function generateAll() {
         for (let key in gRegistry) {
             const entry = gRegistry[key];
             if (entry.arobaseType === arobaseType) {
-                await entry.arobaseType.itemProcessor(key, entry, infos);
+                await entry.arobaseType.codeGenerator(key, entry, infos);
             }
         }
     }
@@ -199,8 +199,8 @@ async function generateAll() {
 
 //region Processing dir
 
-export interface ChildDirProcessorParams {
-    itemType: string;
+export interface ChildDirResolveAndTransformParams {
+    rootDirName: string;
 
     childDir_filesToResolve?: Record<string, string[]>;
     childDir_requireRefFile?: boolean;
@@ -208,23 +208,24 @@ export interface ChildDirProcessorParams {
     childDir_createMissingMyUidFile?: boolean;
     childDir_nameConstraint: "canBeUid"|"mustNotBeUid"|"mustBeUid";
 
-    itemProcessor: (props: ItemProcessorParams) => Promise<void>;
+    transform: (props: DirTransformParams) => Promise<void>;
 }
 
-export interface DirProcessorParams extends ChildDirProcessorParams {
+export interface ProcessThisDirItemsParams extends ChildDirResolveAndTransformParams {
     dirToScan: string;
     dirToScan_expectFsType: "file"|"dir"|"fileOrDir";
 }
 
-export interface ItemProcessorParams {
+export interface DirTransformParams {
     itemName: string;
+    itemPath: string;
+    isFile: boolean;
+
     uid?: string;
     alias: string[];
     refFile?: string;
 
-    itemPath: string;
-    itemType: string;
-    isFile: boolean;
+    parentDirName: string;
     priority: PriorityLevel;
 
     resolved: Record<string, string|undefined>;
@@ -277,7 +278,7 @@ async function searchPriorityLevel(baseDir: string): Promise<PriorityLevel> {
     return priority;
 }
 
-export async function scanDir(p: DirProcessorParams) {
+export async function processThisDirItems(p: ProcessThisDirItemsParams) {
     let dirContent = await jk_fs.listDir(p.dirToScan);
 
     for (let entry of dirContent) {
@@ -285,19 +286,19 @@ export async function scanDir(p: DirProcessorParams) {
 
         if (p.dirToScan_expectFsType === "file") {
             if (entry.isFile) {
-                await scanChildDir(p, entry);
+                await resolveAndTransformChildDir(p, entry);
             }
         } else if (p.dirToScan_expectFsType === "dir") {
             if (entry.isDirectory) {
-                await scanChildDir(p, entry);
+                await resolveAndTransformChildDir(p, entry);
             }
         } else if (p.dirToScan_expectFsType === "fileOrDir") {
-            await scanChildDir(p, entry);
+            await resolveAndTransformChildDir(p, entry);
         }
     }
 }
 
-export async function scanChildDir(p: ChildDirProcessorParams, dirItem: jk_fs.DirItem) {
+export async function resolveAndTransformChildDir(p: ChildDirResolveAndTransformParams, dirItem: jk_fs.DirItem) {
     const itemPath = dirItem.fullPath;
     const itemName = dirItem.name;
     const isFile = dirItem.isFile;
@@ -322,7 +323,7 @@ export async function scanChildDir(p: ChildDirProcessorParams, dirItem: jk_fs.Di
         }
 
         // Process it now.
-        await p.itemProcessor({
+        await p.transform({
             itemName,
             uid: isUUID ? itemName : undefined,
             alias: [],
@@ -330,7 +331,7 @@ export async function scanChildDir(p: ChildDirProcessorParams, dirItem: jk_fs.Di
             priority: PriorityLevel.default,
 
             itemPath, isFile,
-            itemType: p.itemType,
+            parentDirName: p.rootDirName,
 
             resolved: {}
         });
@@ -429,10 +430,10 @@ export async function scanChildDir(p: ChildDirProcessorParams, dirItem: jk_fs.Di
         }
     }
 
-    await p.itemProcessor({
+    await p.transform({
         itemName, uid: itemUid, alias: itemAlias, refFile,
         itemPath, isFile, resolved, priority,
-        itemType: p.itemType
+        parentDirName: p.rootDirName
     });
 }
 
@@ -466,7 +467,7 @@ async function processModule(moduleDir: string) {
 
             let arobaseType = gArobaseHandler[name];
             let params = { moduleDir, arobaseDir: dirItem.fullPath, genDir: gGenRootDir };
-            if (arobaseType) await arobaseType.dirScanner(params);
+            if (arobaseType) await arobaseType.processDir(params);
         }
     }
 }
@@ -480,8 +481,8 @@ export type ArobaseItemProcessor = (key: string, item: RegistryItem, infos: { ge
 
 export interface ArobaseType {
     typeName: string;
-    dirScanner: ArobaseDirScanner;
-    itemProcessor: ArobaseItemProcessor
+    processDir: ArobaseDirScanner;
+    codeGenerator: ArobaseItemProcessor
 }
 
 let gArobaseHandler: Record<string, ArobaseType> = {};

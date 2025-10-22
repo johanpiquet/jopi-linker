@@ -10,44 +10,42 @@ import {
     processThisDirItems
 } from "./engine.ts";
 
-export interface CompositeType extends RegistryItem {
+export interface ListenerType extends RegistryItem {
     allDirPath: string[];
-    items: CompositePart[];
-    itemsType: string;
+    listeners: ListenerPart[];
+    eventName: string;
 }
 
-export interface CompositePart {
+export interface ListenerPart {
     ref?: string;
     entryPoint?: string;
     priority: PriorityLevel;
     sortKey: string;
 }
 
-const arobaseType = addArobaseType("composites", {
+const arobaseType = addArobaseType("listeners", {
     async processDir(p) {
-        let itemTypes = await jk_fs.listDir(p.arobaseDir);
+        let allEventDir = await jk_fs.listDir(p.arobaseDir);
 
-        for (let itemType of itemTypes) {
-            if ((itemType.name[0]==='_') || (itemType.name[0]==='.')) continue;
+        for (let eventDir of allEventDir) {
+            if ((eventDir.name[0]==='_') || (eventDir.name[0]==='.')) continue;
 
-            await processThisDirItems({
-                dirToScan: itemType.fullPath,
-                dirToScan_expectFsType: "dir",
+            await resolveAndTransformChildDir({
                 childDir_nameConstraint: "mustNotBeUid",
 
-                childDir_requireMyUidFile: true,
-                childDir_createMissingMyUidFile: true,
+                childDir_requireMyUidFile: false,
+                childDir_createMissingMyUidFile: false,
                 childDir_requireRefFile: false,
 
-                rootDirName: itemType.name,
+                rootDirName: eventDir.name,
 
-                transform: processComposite
-            });
+                transform: transformEventListener
+            }, eventDir);
         }
     },
 
     async codeGenerator(key, rItem, infos) {
-        function sortByPriority(items: CompositePart[]): CompositePart[] {
+        function sortByPriority(items: ListenerPart[]): ListenerPart[] {
             function addPriority(priority: PriorityLevel) {
                 let e = byPriority[priority];
                 if (e) items.push(...e);
@@ -71,15 +69,14 @@ const arobaseType = addArobaseType("composites", {
             return items;
         }
 
-        const composite = rItem as CompositeType;
-        composite.items = sortByPriority(composite.items);
+        const event = rItem as ListenerType;
+        event.listeners = sortByPriority(event.listeners);
 
         let source = "";
         let count = 1;
+        let outDir = jk_fs.join(infos.genDir, "events");
 
-        let outDir = jk_fs.join(infos.genDir, "composites");
-
-        for (let item of composite.items) {
+        for (let item of event.listeners) {
             let entryPoint = item.entryPoint;
 
             if (!entryPoint) {
@@ -88,29 +85,45 @@ const arobaseType = addArobaseType("composites", {
             }
 
             entryPoint = jk_fs.getRelativePath(outDir, entryPoint);
-            source += `import I${count++} from "${entryPoint}";\n`;
+            source += `import E${count++} from "${entryPoint}";\n`;
         }
 
-        let max = composite.items.length;
-        source += "\nexport const C = [";
-        for (let i = 1; i <= max; i++) source += `I${i},`;
-        source += "];";
+        source += `import {addListener} from "jopi-toolkit/jk_events";\n`;
+
+        let max = event.listeners.length;
+        source += "\naddListener(`" + event.eventName + "`, (e) => {";
+        source += "\n   async function exec() {";
+
+        for (let i = 1; i <= max; i++) {
+            source += `\n       let r${i}: any = E${i}(e);`;
+            source += `\n       if (r${i} instanceof Promise) await r${i};`;
+            source += `\n       if (e.canceled || e.isCatch) return;`
+        }
+
+        source += "\n   }";        // exec
+        source += "\n";
+
+        source += `\n   if (!e || !e.promises) throw new Error("Use of async event required");`;
+        source += "\n   e.promises.push(exec());";
+        source += "\n});";      // addListener
+
+
 
         let fileName = key.substring(key.indexOf("_") + 1) + ".ts";
         await genWriteFile(jk_fs.join(outDir, fileName), source);
     }
 });
 
-async function processComposite(p: DirTransformParams) {
-    let compositeId = "composite_" + p.uid!;
+async function transformEventListener(p: DirTransformParams) {
+    let eventName = p.parentDirName;
 
-    // > Extract the composite items.
+    // > Extract the listener items.
 
     const dirItems = await getSortedDirItem(p.itemPath);
-    let compositeItems: CompositePart[] = [];
+    let listenerItems: ListenerPart[] = [];
 
     const params: ChildDirResolveAndTransformParams = {
-        rootDirName: p.parentDirName,
+        rootDirName: eventName,
         childDir_nameConstraint: "mustNotBeUid",
         childDir_requireMyUidFile: false,
 
@@ -120,10 +133,10 @@ async function processComposite(p: DirTransformParams) {
 
         transform: async (item) => {
             if (item.refFile && item.resolved.entryPoint) {
-                throw declareError("The composite can't have both an index file and a .ref file", item.itemPath);
+                throw declareError("The event listener can't have both an index file and a .ref file", item.itemPath);
             }
 
-            compositeItems.push({
+            listenerItems.push({
                 priority: item.priority,
                 sortKey: item.itemName,
                 ref: item.refFile,
@@ -138,26 +151,23 @@ async function processComposite(p: DirTransformParams) {
         await resolveAndTransformChildDir(params, dirItem);
     }
 
-    // > Add the composite.
+    // > Add the listener.
 
-    let current = getRegistryItem<CompositeType>(compositeId, arobaseType);
+    const registryKey = "event_" + eventName;
+    let current = getRegistryItem<ListenerType>(registryKey, arobaseType);
 
     if (!current) {
-        const newItem: CompositeType = {
+        const newItem: ListenerType = {
             arobaseType, itemPath: p.itemPath,
-            items: compositeItems, itemsType: p.parentDirName, allDirPath: [p.itemPath]
+            listeners: listenerItems, eventName: p.parentDirName, allDirPath: [p.itemPath]
         };
 
-        addToRegistry([compositeId], newItem);
+        addToRegistry([registryKey], newItem);
         return;
     }
 
-    if (current.itemsType !== p.parentDirName) {
-        throw declareError(`The composite ${compositeId} is already defined and has a different type: ${current.itemsType}`, p.itemPath);
-    }
-
     current.allDirPath.push(p.itemPath);
-    current.items.push(...compositeItems);
+    current.listeners.push(...listenerItems);
 }
 
 export default arobaseType;
