@@ -1,31 +1,30 @@
 import * as jk_fs from "jopi-toolkit/jk_fs";
+import defineArobaseType, {type DefineItem} from "./typeDefines.ts";
 
 import {
-    addArobaseType,
+    addArobaseType, addToRegistry,
     checkDirItem, type ChildDirProcessorParams,
-    declareError,
+    declareError, genWriteFile, getRegistryItem,
     getSortedDirItem,
-    type ItemProcessorParams, PriorityLevel, scanChildDir,
+    type ItemProcessorParams, PriorityLevel, type RegistryItem, requireRegistryItem, scanChildDir,
     scanDir
 } from "./engine.ts";
 
-export interface CompositeItem {
-    ref?: string;
-    entryPoint?: string;
-    priority: PriorityLevel;
-    sortKey: string;
-}
-
-export interface Composite {
+export interface Composite extends RegistryItem {
     uid: string;
     allDirPath: string[];
     items: CompositeItem[];
     itemsType: string;
 }
 
-const gComposites: Record<string, Composite> = {};
+export interface CompositeItem  {
+    ref?: string;
+    entryPoint?: string;
+    priority: PriorityLevel;
+    sortKey: string;
+}
 
-addArobaseType("composites", {
+const arobaseType = addArobaseType("composites", {
     async dirScanner(p) {
         let itemTypes = await jk_fs.listDir(p.arobaseDir);
 
@@ -48,7 +47,57 @@ addArobaseType("composites", {
         }
     },
 
-    async itemProcessor(e) {
+    async itemProcessor(key, rItem, infos) {
+        function sortByPriority(items: CompositeItem[]): CompositeItem[] {
+            function addPriority(priority: PriorityLevel) {
+                let e = byPriority[priority];
+                if (e) items.push(...e);
+            }
+
+            const byPriority: any = {};
+
+            for (let item of items) {
+                if (!byPriority[item.priority]) byPriority[item.priority] = [];
+                byPriority[item.priority].push(item);
+            }
+
+            items = [];
+
+            addPriority(PriorityLevel.veryHigh);
+            addPriority(PriorityLevel.high);
+            addPriority(PriorityLevel.default);
+            addPriority(PriorityLevel.low);
+            addPriority(PriorityLevel.veryLow);
+
+            return items;
+        }
+
+        const composite = rItem as Composite;
+        composite.items = sortByPriority(composite.items);
+
+        let source = "";
+        let count = 1;
+
+        let outDir = jk_fs.join(infos.genDir, "id");
+
+        for (let item of composite.items) {
+            let entryPoint = item.entryPoint;
+
+            if (!entryPoint) {
+                let d = requireRegistryItem<DefineItem>(item.ref!, defineArobaseType);
+                entryPoint = d.entryPoint;
+            }
+
+            entryPoint = jk_fs.getRelativePath(outDir, entryPoint);
+            source += `import I${count++} from "${entryPoint}";\n`;
+        }
+
+        let max = composite.items.length;
+        source += "\nexport const C = [";
+        for (let i = 1; i <= max; i++) source += `I${i},`;
+        source += "];";
+
+        await genWriteFile(jk_fs.join(outDir, key + ".ts"), source);
     }
 });
 
@@ -90,76 +139,20 @@ async function processComposite(p: ItemProcessorParams) {
     addComposite(compositeId, compositeItems, p.itemPath, p.itemType);
 }
 
-function addComposite(uid: string, items: CompositeItem[], dirPath: string, itemsType: string) {
-    let current = gComposites[uid];
+function addComposite(uid: string, items: CompositeItem[], itemPath: string, itemsType: string) {
+    let current = getRegistryItem<Composite>(uid, arobaseType);
 
     if (!current) {
-        gComposites[uid] = {uid, allDirPath: [dirPath], items, itemsType};
+        addToRegistry([uid], {uid, allDirPath: [itemPath], items, itemsType, arobaseType, itemPath});
         return;
     }
 
     if (current.itemsType !== itemsType) {
-        throw declareError(`The composite ${uid} is already defined with a different item type (${current.itemsType})`, dirPath);
+        throw declareError(`The composite ${uid} is already defined and has a different type: ${current.itemsType}`, itemPath);
     }
 
-    current.allDirPath.push(dirPath);
+    current.allDirPath.push(itemPath);
     current.items.push(...items);
 }
 
-/*async function generateComposites() {
-    async function emitComposite(composite: Composite) {
-        composite.items = sortByPriority(composite.items);
-
-        let source = "";
-        let count = 1;
-
-        let outDir = jk_fs.join(gGenRootDir, "id");
-
-        for (let item of composite.items) {
-            let entryPoint = item.entryPoint;
-
-            if (!entryPoint) {
-                let d = requireRegistryItem(item.ref!);
-                entryPoint = d.entryPoint;
-            }
-
-            entryPoint = jk_fs.getRelativePath(outDir, entryPoint);
-            source += `import I${count++} from "${entryPoint}";\n`;
-        }
-
-        let max = composite.items.length;
-        source += "\nexport const C = [";
-        for (let i=1;i<=max;i++) source += `I${i},`;
-        source += "];";
-
-        await genWriteFile(jk_fs.join(outDir, composite.uid + ".ts"), source);
-    }
-
-    function sortByPriority(items: CompositeItem[]): CompositeItem[] {
-        function addPriority(priority: PriorityLevel) {
-            let e = byPriority[priority];
-            if (e) items.push(...e);
-        }
-
-        const byPriority: any = {};
-
-        for (let item of items) {
-            if (!byPriority[item.priority]) byPriority[item.priority] = [];
-            byPriority[item.priority].push(item);
-        }
-
-        items = [];
-
-        addPriority(PriorityLevel.veryHigh);
-        addPriority(PriorityLevel.high);
-        addPriority(PriorityLevel.default);
-        addPriority(PriorityLevel.low);
-        addPriority(PriorityLevel.veryLow);
-
-        return items;
-    }
-
-    for (let composite of Object.values(gComposites)) {
-        await emitComposite(composite);
-    }
-}*/
+export default arobaseType;

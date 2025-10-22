@@ -1,7 +1,21 @@
 import * as jk_fs from "jopi-toolkit/jk_fs";
-import {addArobaseType, addToRegistry, createLink_Symlink, declareError, type DefineItem, scanDir} from "./engine.ts";
+import {
+    addArobaseType,
+    addToRegistry,
+    createLink_Symlink,
+    declareError,
+    type RegistryItem,
+    scanDir
+} from "./engine.ts";
 
-const gArobaseType = addArobaseType("defines", {
+export interface DefineItem extends RegistryItem {
+    uid: string;
+    alias: string[];
+    entryPoint: string;
+    itemType: string;
+}
+
+const arobaseType = addArobaseType("defines", {
     async dirScanner(p) {
         let itemTypes = await jk_fs.listDir(p.arobaseDir);
 
@@ -29,7 +43,7 @@ const gArobaseType = addArobaseType("defines", {
                     }
 
                     addToRegistry([props.uid!, ...props.alias], {
-                        arobaseType: gArobaseType,
+                        arobaseType: arobaseType,
 
                         uid: props.uid!,
                         alias: props.alias,
@@ -48,3 +62,5 @@ const gArobaseType = addArobaseType("defines", {
         await createLink_Symlink(newFilePath, jk_fs.dirname(item.entryPoint));
     }
 });
+
+export default arobaseType;

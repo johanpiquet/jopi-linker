@@ -33,7 +33,7 @@ export async function resolveFile(sourceDirPath: string, fileNames: string[]): P
 }
 
 export function declareError(message: string, filePath?: string): Error {
-    jk_term.logBgRed("⚠️ Error -", message, "⚠️");
+    jk_term.logBgRed("⚠️ Jopi Linker Error -", message, "⚠️");
     if (filePath) jk_term.logBlue("See:", jk_fs.pathToFileURL(filePath));
     process.exit(1);
 }
@@ -81,13 +81,6 @@ export interface RegistryItem {
     arobaseType: ArobaseType;
 }
 
-export interface DefineItem extends RegistryItem {
-    uid: string;
-    alias: string[];
-    entryPoint: string;
-    itemType: string;
-}
-
 export interface ReplaceItem {
     mustReplace: string;
     mustReplaceIsUID: boolean;
@@ -99,15 +92,19 @@ export interface ReplaceItem {
     declarationFile: string;
 }
 
-export interface AddDefineParams extends DefineItem {
-}
-
 const gRegistry: Record<string, RegistryItem> = {};
 const gReplacing: Record<string, ReplaceItem> = {};
 
-export function requireRegistryItem<T extends RegistryItem>(uid: string): T {
-    let entry = gRegistry[uid];
-    if (!entry) throw declareError("The UID " + uid + " is required but not defined");
+export function requireRegistryItem<T extends RegistryItem>(key: string, requireType?: ArobaseType): T {
+    const entry = gRegistry[key];
+    if (!entry) throw declareError("The item " + key + " is required but not defined");
+    if (requireType && (entry.arobaseType !== requireType)) throw declareError("The item " + key + " is not of the expected type @" + requireType.typeName);
+    return entry as T;
+}
+
+export function getRegistryItem<T extends RegistryItem>(key: string, requireType?: ArobaseType): T|undefined {
+    const entry = gRegistry[key];
+    if (requireType && entry && (entry.arobaseType !== requireType)) throw declareError("The item " + key + " is not of the expected type @" + requireType.typeName);
     return entry as T;
 }
 
@@ -129,11 +126,13 @@ export function addReplace(mustReplace: string, replaceWith: string, priority: P
     if (LOG) console.log("Add REPLACE", mustReplace, "=>", replaceWith, "priority", priority);
 }
 
+export function errorAlreadyDefined(key: string) {
+    return declareError("The item " + key + " is already defined", gRegistry[key].itemPath);
+}
+
 export function addToRegistry<T extends RegistryItem>(keys: string[], item: T) {
     for (let key of keys) {
-        if (gRegistry[key]) {
-            throw declareError("The item " + key + " is already defined", gRegistry[key].itemPath);
-        }
+        if (gRegistry[key]) throw errorAlreadyDefined(key);
 
         gRegistry[key] = item;
 
