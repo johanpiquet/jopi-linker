@@ -11,7 +11,7 @@
     "jsx": "react-jsx",
     "target": "ESNext",
     "module": "ESNext",
-    "moduleResolution": "bundler",
+    "moduleResolution": "Bundler",
 
     "rewriteRelativeImportExtensions": true,
     "esModuleInterop": true,
@@ -22,11 +22,17 @@
     "verbatimModuleSyntax": true,
     "allowJs": false,
 
+    "allowSyntheticDefaultImports": true,
+    "types": ["jopi-rewrite/types", "@types/bun"],
+
+    "baseUrl": ".",
+
     "paths": {
       "@/events/*": ["./src/_jopiLinkerGen/events/*"],
-      "@/composites/*": ["./src/_jopiLinkerGen/composites/*"],
-      "@/chunk/*": ["./src/_jopiLinkerGen/uid/*"],
-      "@/linker/*": ["./src/_jopiLinkerGen/*"]
+      "@/uiBlocks/*": ["./src/_jopiLinkerGen/uiBlocks/*"],
+      "@/uiComponents/*": ["./src/_jopiLinkerGen/uiComponents/*"],
+      "@/uiChunks/*": ["./src/_jopiLinkerGen/uiChunks/*"],
+      "@/uiComposites/*": ["./src/_jopiLinkerGen/uiComposites/*"]
     }
   },
 
@@ -36,9 +42,12 @@
   ],
 
   "exclude": [
-    "sampleProject",
     "node_modules",
     "dist",
+    "**/*.spec.ts",
+    "**/*.spec.tsx",
+    "**/*.test.ts",
+    "**/*.test.tsx",
     "**/.turbo",
     "**/.cache"
   ]
